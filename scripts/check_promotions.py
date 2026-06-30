@@ -249,32 +249,46 @@ def main():
             junho_text = camp_text(in_junho, junho_status, junho_price)
             julho_text = camp_text(in_julho, julho_status, julho_price)
 
-            # Alerta
-            alertas = []
-            if in_junho and junho_status == "started":
-                alertas.append("⚠ EXPIRA AMANHA! Sair da campanha Junho")
-            if not in_julho:
-                alertas.append("Fora da campanha Julho — verificar")
-            elif julho_status == "candidate":
-                alertas.append("Candidato ao Julho — confirmar inscrição")
-            alerta_text = " | ".join(alertas) if alertas else "OK"
+            # Alerta — lógica correta de campanhas simultâneas
+            julho_confirmado = in_julho and julho_status in ("started", "pending")
+
+            if julho_confirmado and in_junho and junho_status == "started":
+                # Ambas ativas: Julho já garante continuidade, Junho expira sem problema
+                alerta_text = "Julho ja programado — OK"
+                alerta_urgente = False
+            elif julho_confirmado:
+                alerta_text = "Julho ativo — OK"
+                alerta_urgente = False
+            elif in_julho and julho_status == "candidate":
+                alerta_text = "Candidato ao Julho — confirmar inscricao"
+                alerta_urgente = False
+            elif in_junho and junho_status == "started":
+                # Na Junho mas SEM Julho garantido — urgente
+                alerta_text = "EXPIRA AMANHA! Nao inscrito no Julho"
+                alerta_urgente = True
+            elif not in_junho and not in_julho:
+                alerta_text = "Fora de ambas as campanhas"
+                alerta_urgente = False
+            else:
+                alerta_text = "Verificar"
+                alerta_urgente = False
 
             # Fills
-            if in_junho and junho_status == "started":
-                junho_fill = ORANGE_FILL
+            if in_junho and junho_status == "started" and not julho_confirmado:
+                junho_fill = ORANGE_FILL   # urgente: Junho expira sem Julho
+            elif in_junho and junho_status == "started":
+                junho_fill = YELLOW_FILL   # Junho ativa mas Julho ja garantido
             elif in_junho:
                 junho_fill = YELLOW_FILL
             else:
                 junho_fill = GRAY_FILL
 
-            if in_julho and julho_status in ("started", "pending"):
+            if julho_confirmado:
                 julho_fill = GREEN_FILL
             elif in_julho and julho_status == "candidate":
                 julho_fill = YELLOW_FILL
             else:
                 julho_fill = RED_FILL
-
-            row_fill = RED_FILL if alertas and "EXPIRA" in alertas[0] else WHITE_FILL
 
             # Escreve linha
             values = [mlb_id, title, price, status_ml, junho_text, julho_text, alerta_text]
@@ -288,14 +302,18 @@ def main():
                 elif col == 6:
                     c.fill = julho_fill
                 elif col == 7:
-                    if "EXPIRA" in alerta_text:
+                    if alerta_urgente:
                         c.fill = ORANGE_FILL
                         c.font = Font(bold=True, color="880000")
-                    elif "Fora" in alerta_text:
+                    elif "Fora de ambas" in alerta_text or "Verificar" in alerta_text:
                         c.fill = RED_FILL
                         c.font = Font(color="880000")
+                    elif "Candidato" in alerta_text:
+                        c.fill = YELLOW_FILL
+                        c.font = Font(color="664400")
                     else:
                         c.fill = GREEN_FILL
+                        c.font = Font(color="1A5C1A")
 
             out_row += 1
 
@@ -309,16 +327,26 @@ def main():
 
     # Resumo
     total   = out_row - 2
-    exp     = sum(1 for r in promotions_cache.values()
-                  if any(p.get("id") == CAMP_JUNHO and p.get("status") == "started" for p in r))
-    fora_j  = sum(1 for r in promotions_cache.values()
-                  if not any(p.get("id") == CAMP_JULHO for p in r))
+    def _has(promos, camp_id, statuses=None):
+        for p in promos:
+            if p.get("id") == camp_id:
+                return statuses is None or p.get("status") in statuses
+        return False
 
-    print(f"\n{'='*50}")
+    julho_ok    = sum(1 for r in promotions_cache.values()
+                      if _has(r, CAMP_JULHO, ("started", "pending")))
+    junho_only  = sum(1 for r in promotions_cache.values()
+                      if _has(r, CAMP_JUNHO, ("started",))
+                      and not _has(r, CAMP_JULHO, ("started", "pending")))
+    fora_ambas  = sum(1 for r in promotions_cache.values()
+                      if not _has(r, CAMP_JUNHO) and not _has(r, CAMP_JULHO))
+
+    print(f"\n{'='*52}")
     print(f"  Total anuncios analisados : {total}")
-    print(f"  Ativos na campanha Junho  : {exp}  *** EXPIRAM AMANHA ***")
-    print(f"  Fora da campanha Julho    : {fora_j}")
-    print(f"{'='*50}")
+    print(f"  Julho ja garantido (OK)   : {julho_ok}")
+    print(f"  Apenas Junho (URGENTE!)   : {junho_only}  *** sem Julho programado ***")
+    print(f"  Fora de ambas campanhas   : {fora_ambas}")
+    print(f"{'='*52}")
 
 
 if __name__ == "__main__":

@@ -6,8 +6,8 @@
   "ml_client_id": "5214163999272816",
   "ml_client_secret": "hQzxjNMfTN1HBQCo4S8wohtUFd0yXnvS",
   "ml_user_id": "1180812007",
-  "ml_refresh_token": "TG-6a43cc8b674d1d0001318b0e-1180812007",
-  "ml_access_token": "APP_USR-5214163999272816-063010-8489bcc96f24fbee17ee31c9b76caa6a-1180812007",
+  "ml_refresh_token": "TG-6a441c8d6a49220001a025cd-1180812007",
+  "ml_access_token": "APP_USR-5214163999272816-063015-bebd87c6149c4028e133521be0ab9f21-1180812007",
   "excel_input": "D:\\backend\\input\\bouw_skus_a_validar.xlsx",
   "excel_output": "D:\\backend\\output\\output.xlsx"
 }

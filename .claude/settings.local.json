@@ -5,7 +5,13 @@
       "Bash(cd /d d:/backend)",
       "Skill(artifact-design)",
       "Skill(artifact-design:*)",
-      "Bash(python)"
+      "Bash(python)",
+      "Bash(mkdir -p d:/backend/interfaces d:/backend/connectors/mercadolivre d:/backend/connectors/tiny d:/backend/services && echo \"dirs ok\")",
+      "mcp__claude_ai_Google_Drive__search_files",
+      "Bash(python scripts/check_promotions.py)"
+    ],
+    "additionalDirectories": [
+      "d:\\backend"
     ]
   }
 }

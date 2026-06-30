@@ -18,8 +18,8 @@ from pathlib import Path
 import requests
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
-sys.path.insert(0, str(Path(__file__).parent.parent / "connectors"))
-import tiny_client as tc
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from connectors.tiny import client as tc
 
 # ── Config ────────────────────────────────────────────────────────────────────
 

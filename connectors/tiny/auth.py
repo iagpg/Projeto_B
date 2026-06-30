@@ -1,10 +1,10 @@
 """
-tiny_auth_setup.py
-------------------
-Autorização inicial Tiny ERP v3 (roda só uma vez, ou quando o token expirar).
+connectors/tiny/auth.py
+------------------------
+Autorização inicial Tiny ERP v3. Roda uma vez (ou quando o token expirar).
 
 Uso:
-    python tiny_auth_setup.py
+    python connectors/tiny/auth.py
 """
 
 import json
@@ -16,9 +16,9 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse, parse_qs
 import requests
 
-_DIR        = Path(__file__).parent.parent
-_CONFIG     = _DIR / "config.json"
-_TOKEN_FILE = _DIR / "tiny_token.json"
+_ROOT       = Path(__file__).parent.parent.parent   # d:/backend
+_CONFIG     = _ROOT / "config.json"
+_TOKEN_FILE = _ROOT / "tiny_token.json"
 _TOKEN_URL  = "https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/token"
 _AUTH_URL   = "https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/auth"
 _REDIRECT   = "http://localhost:8080/callback"
@@ -49,14 +49,15 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, *args):
-        pass  # silencia logs do servidor
+        pass
 
 
-def _wait_for_code(timeout=120):
+def _wait_for_code(timeout: int = 120) -> None:
     server = HTTPServer(("localhost", 8080), _CallbackHandler)
     server.timeout = 1
-    deadline = time.time() + timeout
-    while time.time() < deadline and _captured_code is None:
+    import time as _t
+    deadline = _t.time() + timeout
+    while _t.time() < deadline and _captured_code is None:
         server.handle_request()
     server.server_close()
 
@@ -78,25 +79,23 @@ def main():
     print("  Faça login no Tiny e autorize o app.")
     print("  O code será capturado automaticamente.\n")
 
-    # Sobe servidor local em thread separada
     t = threading.Thread(target=_wait_for_code, args=(120,), daemon=True)
     t.start()
-
     webbrowser.open(auth_url)
 
     print("  Aguardando callback (até 120s)...")
     t.join(timeout=125)
 
     if not _captured_code:
-        print("\n  Timeout ou erro: code não recebido.")
-        print("  Abra manualmente a URL abaixo e cole o code:")
+        print("\n  Timeout: code não recebido.")
+        print("  Abra manualmente e cole o code:")
         print(f"\n  {auth_url}\n")
         _captured_code = input("  Cole o code aqui: ").strip()
         if not _captured_code:
             print("  Nenhum code informado. Abortando.")
             return
 
-    print(f"\n  Code recebido. Trocando por token...")
+    print("\n  Code recebido. Trocando por token...")
     r = requests.post(_TOKEN_URL, data={
         "grant_type":    "authorization_code",
         "client_id":     CLIENT_ID,
@@ -118,17 +117,16 @@ def main():
     print(f"\n  Token salvo em: {_TOKEN_FILE}")
     print("  Testando conexão...")
 
-    token = d["access_token"]
     r2 = requests.get(
         "https://erp.tiny.com.br/public-api/v3/produtos",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {d['access_token']}"},
         params={"limite": 1},
         timeout=10,
     )
     if r2.status_code == 200:
-        print("  Conexão OK! Pronto para rodar validate_skus.py")
+        print("  Conexão OK!")
     else:
-        print(f"  Aviso: teste retornou HTTP {r2.status_code} — {r2.text[:200]}")
+        print(f"  Aviso: HTTP {r2.status_code} — {r2.text[:200]}")
 
 
 if __name__ == "__main__":

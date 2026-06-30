@@ -1,0 +1,262 @@
+---
+
+# Princípios Arquiteturais (IA-First)
+
+Este projeto deve ser concebido desde o início como uma **plataforma de integração orientada por IA (AI-First Integration Platform)**.
+
+O foco principal não é apenas integrar APIs, mas criar uma camada inteligente que abstraia completamente a complexidade dos sistemas externos, permitindo que agentes de IA interajam com diferentes plataformas através de ferramentas padronizadas.
+
+A IA nunca deverá conhecer detalhes como:
+
+- URLs de APIs
+- autenticação
+- OAuth
+- paginação
+- rate limits
+- formatos específicos de resposta
+- diferenças entre fornecedores
+
+Toda essa complexidade deverá estar encapsulada dentro da arquitetura.
+
+A IA apenas conhece e executa **Tools**.
+
+Exemplo:
+
+```
+buscar_produto()
+
+buscar_pedido()
+
+consultar_estoque()
+
+listar_reclamacoes()
+
+emitir_nf()
+
+gerar_dashboard_vendas()
+
+analisar_margem()
+
+comparar_periodos()
+```
+
+Independentemente de qual sistema fornece os dados.
+
+---
+
+# Arquitetura Modular
+
+O projeto deve ser completamente modular.
+
+Cada nova integração deverá ser adicionada como um novo módulo independente.
+
+Exemplo:
+
+```
+connectors/
+
+    tiny/
+
+    mercadolivre/
+
+    amazon/
+
+    shopee/
+
+    magalu/
+
+    bling/
+
+    omie/
+
+    google-ads/
+
+    meta-ads/
+
+    power-bi/
+
+    n8n/
+
+    ...
+```
+
+Adicionar um novo Connector nunca deverá exigir alterações nos Connectors existentes.
+
+---
+
+# Independência entre Sistemas
+
+Os Services nunca devem depender de uma implementação específica.
+
+Sempre que possível, trabalhar utilizando interfaces.
+
+Exemplo:
+
+```
+IProductConnector
+
+IOrderConnector
+
+IInventoryConnector
+
+IInvoiceConnector
+
+ICustomerConnector
+```
+
+Dessa forma, um Service poderá consultar diferentes sistemas sem conhecer sua implementação.
+
+Exemplo:
+
+```
+ProdutoService
+
+↓
+
+IProductConnector
+
+↓
+
+TinyConnector
+
+ou
+
+AmazonConnector
+
+ou
+
+BlingConnector
+```
+
+O Service deve depender apenas da interface.
+
+---
+
+# Evolução da Plataforma
+
+A arquitetura deve permitir que futuramente sejam adicionadas integrações como:
+
+## Marketplaces
+
+- Mercado Livre
+- Amazon
+- Shopee
+- Magalu
+- Via Marketplace
+- MadeiraMadeira
+- Leroy Merlin Marketplace
+
+## ERPs
+
+- Tiny
+- Bling
+- Omie
+- SAP
+- Totvs
+
+## Plataformas de E-commerce
+
+- Nuvemshop
+- Loja Integrada
+- Tray
+- Shopify
+- WooCommerce
+
+## Marketing
+
+- Google Ads
+- Meta Ads
+- TikTok Ads
+
+## BI
+
+- Power BI
+- Looker Studio
+
+## Logística
+
+- Melhor Envio
+- Frenet
+- Intelipost
+
+## Financeiro
+
+- Asaas
+- Mercado Pago
+- PagBank
+- Stripe
+
+## Comunicação
+
+- WhatsApp Business
+- Gmail
+- Slack
+- Discord
+
+Todas essas integrações devem seguir exatamente o mesmo padrão arquitetural.
+
+---
+
+# Contrato das Tools
+
+As Tools representam a API pública da plataforma para agentes de IA.
+
+Elas devem permanecer estáveis ao longo do tempo.
+
+Mesmo que um Connector seja substituído (por exemplo, trocar Tiny por outro ERP), nenhuma Tool deverá precisar ser modificada.
+
+Exemplo:
+
+```
+buscar_produto()
+
+↓
+
+ProdutoService
+
+↓
+
+TinyConnector
+```
+
+No futuro:
+
+```
+buscar_produto()
+
+↓
+
+ProdutoService
+
+↓
+
+OmieConnector
+```
+
+A IA continua utilizando exatamente a mesma Tool.
+
+---
+
+# Filosofia do Projeto
+
+Este projeto não deve ser visto como um conjunto de integrações.
+
+Ele deve ser visto como uma **plataforma de integração empresarial**, onde novos módulos possam ser adicionados continuamente sem impactar os módulos existentes.
+
+Os princípios fundamentais são:
+
+- Modularidade
+- Escalabilidade
+- Extensibilidade
+- Baixo acoplamento
+- Alta coesão
+- Reutilização de código
+- Interfaces bem definidas
+- Inversão de dependência
+- Forte tipagem
+- Padronização das respostas
+- Arquitetura orientada a domínio
+- Arquitetura orientada a ferramentas (Tools)
+- AI-First Design
+
+A arquitetura deve permitir que a plataforma evolua durante muitos anos sem necessidade de grandes refatorações estruturais.

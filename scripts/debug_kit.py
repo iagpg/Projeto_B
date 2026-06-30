@@ -10,8 +10,8 @@ Usage:
 import json
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "connectors"))
-import tiny_client as tc
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from connectors.tiny import client as tc
 
 
 def main():

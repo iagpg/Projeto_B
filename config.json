@@ -1,0 +1,13 @@
+{
+  "tiny_token": "0e972d848c1979f844a85c7939259ef24d3c1ecae4126c67f61e501743a76b2f",
+  "tiny_v3_client_id": "tiny-api-5d353dab36a296e34fa8e1ce745de3842ee5c3d8-1782256556",
+  "tiny_v3_client_secret": "tHnUXaQWdbqPsDb5z4ix8Ac6hRkgjTBQ",
+  "tiny_v3_access_token": "",
+  "ml_client_id": "5214163999272816",
+  "ml_client_secret": "hQzxjNMfTN1HBQCo4S8wohtUFd0yXnvS",
+  "ml_user_id": "1180812007",
+  "ml_refresh_token": "TG-6a42583ce681600001c96361-1180812007",
+  "ml_access_token": "APP_USR-5214163999272816-062907-7d5163ea81685a5871ecadba086358d4-1180812007",
+  "excel_input": "D:\\backend\\input\\bouw_skus_a_validar.xlsx",
+  "excel_output": "D:\\backend\\output\\output.xlsx"
+}

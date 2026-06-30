@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(cd /d d:/backend)",
+      "Skill(artifact-design)",
+      "Skill(artifact-design:*)",
+      "Bash(python)"
+    ]
+  }
+}

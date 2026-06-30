@@ -1,0 +1,93 @@
+"""
+tiny_client.py
+--------------
+Tiny ERP API v3 — módulo base com OAuth2 + auto-refresh.
+Lê credenciais de config.json, salva token em tiny_token.json.
+"""
+
+import json
+import time
+from pathlib import Path
+import requests
+
+_DIR        = Path(__file__).parent.parent
+_CONFIG     = _DIR / "config.json"
+_TOKEN_FILE = _DIR / "tiny_token.json"
+_BASE       = "https://erp.tiny.com.br/public-api/v3"
+_TOKEN_URL  = "https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/token"
+
+with open(_CONFIG) as f:
+    _cfg = json.load(f)
+
+_CLIENT_ID     = _cfg["tiny_v3_client_id"]
+_CLIENT_SECRET = _cfg["tiny_v3_client_secret"]
+
+_token_data = {}
+if _TOKEN_FILE.exists():
+    with open(_TOKEN_FILE) as f:
+        _token_data = json.load(f)
+
+
+def _save_token(d):
+    global _token_data
+    _token_data = d
+    with open(_TOKEN_FILE, "w") as f:
+        json.dump(d, f, indent=2)
+
+
+def _refresh():
+    rt = _token_data.get("refresh_token")
+    if not rt:
+        raise RuntimeError("No refresh_token. Run tiny_auth_setup.py to authenticate.")
+    r = requests.post(_TOKEN_URL, data={
+        "grant_type":    "refresh_token",
+        "client_id":     _CLIENT_ID,
+        "client_secret": _CLIENT_SECRET,
+        "refresh_token": rt,
+    }, timeout=15)
+    d = r.json()
+    if "access_token" not in d:
+        raise RuntimeError(f"Tiny token refresh failed: {d}. Run tiny_auth_setup.py.")
+    _save_token(d)
+    return d["access_token"]
+
+
+def _access_token():
+    at = _token_data.get("access_token", "")
+    exp = _token_data.get("_expires_at", 0)
+    # If _expires_at is missing, just use the token (will refresh on 401)
+    if at and (exp == 0 or time.time() < exp - 60):
+        return at
+    return _refresh()
+
+
+def get(path, params=None, retry=True):
+    token = _access_token()
+    r = requests.get(
+        f"{_BASE}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        params=params or {},
+        timeout=15,
+    )
+    if r.status_code == 401 and retry:
+        _refresh()
+        return get(path, params, retry=False)
+    r.raise_for_status()
+    return r.json()
+
+
+# ── Funções de alto nível ────────────────────────────────────────────────────
+
+def get_produtos(pesquisa=None, situacao=None):
+    params = {}
+    if pesquisa:  params["pesquisa"]  = pesquisa
+    if situacao:  params["situacao"]  = situacao
+    return get("/produtos", params)
+
+
+def get_produto(produto_id):
+    return get(f"/produtos/{produto_id}")
+
+
+def get_estoque_produto(produto_id):
+    return get(f"/produtos/{produto_id}/estoque")

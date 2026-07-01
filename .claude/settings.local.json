@@ -8,7 +8,10 @@
       "Bash(python)",
       "Bash(mkdir -p d:/backend/interfaces d:/backend/connectors/mercadolivre d:/backend/connectors/tiny d:/backend/services && echo \"dirs ok\")",
       "mcp__claude_ai_Google_Drive__search_files",
-      "Bash(python scripts/check_promotions.py)"
+      "Bash(python scripts/check_promotions.py)",
+      "Bash(python scripts/check_promotions.py --b)",
+      "Bash(python scripts/check_promotions.py --a)",
+      "Bash(python scripts/check_promotions.py --d)"
     ],
     "additionalDirectories": [
       "d:\\backend"

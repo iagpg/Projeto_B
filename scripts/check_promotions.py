@@ -1,17 +1,21 @@
 """
 scripts/check_promotions.py
 ----------------------------
-Lê a aba "Curva B" do Ecommerce.xlsx, verifica cada anúncio no ML e
-cria uma nova aba "Análise Promoções" com status das campanhas Junho e Julho.
+Verifica promoções ML para anúncios de uma aba da Curva do Ecommerce.xlsx
+e cria uma aba "Analise Promocoes <CURVA>" com o status de cada campanha.
 
 Campanhas monitoradas:
   C-MLB4305989  "Junho ate Julho"  — expira 01/07/2026  ⚠ URGENTE
   C-MLB4586868  "Julho"            — inicia 01/07/2026, vai até 01/08/2026
 
 Uso:
-    python scripts/check_promotions.py
+    python scripts/check_promotions.py        # padrão: Curva B
+    python scripts/check_promotions.py --a    # Curva A
+    python scripts/check_promotions.py --b    # Curva B
+    python scripts/check_promotions.py --c    # Curva C
 """
 
+import argparse
 import json
 import sys
 import time
@@ -128,13 +132,25 @@ def check_campaign(promotions, camp_id):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    _refresh()
-    print("Token refreshed OK")
+    parser = argparse.ArgumentParser(description="Verifica promoções ML por Curva")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--a", dest="curva", action="store_const", const="A", help="Curva A")
+    group.add_argument("--b", dest="curva", action="store_const", const="B", help="Curva B (padrão)")
+    group.add_argument("--c", dest="curva", action="store_const", const="C", help="Curva C")
+    args = parser.parse_args()
 
-    # Lê aba Curva B
+    curva     = args.curva or "B"
+    tab_name  = f"Curva {curva}"
+    out_tab   = f"Analise Promocoes {curva}"
+
+    _refresh()
+    print(f"Token refreshed OK | Processando: {tab_name}")
+
     wb = openpyxl.load_workbook(EXCEL_PATH)
-    ws = wb["Curva B"]
-    print(f"Curva B: {ws.max_row - 1} linhas de dados")
+    if tab_name not in wb.sheetnames:
+        sys.exit(f"Aba '{tab_name}' nao encontrada em {EXCEL_PATH}")
+    ws = wb[tab_name]
+    print(f"{tab_name}: {ws.max_row - 1} linhas de dados")
 
     # Coleta todos os IDs únicos
     rows_data = []   # [(row_num, [item_ids])]
@@ -176,10 +192,9 @@ def main():
 
     # ── Cria nova aba ─────────────────────────────────────────────────────────
 
-    TAB_NAME = "Analise Promocoes"
-    if TAB_NAME in wb.sheetnames:
-        del wb[TAB_NAME]
-    ws_out = wb.create_sheet(TAB_NAME)
+    if out_tab in wb.sheetnames:
+        del wb[out_tab]
+    ws_out = wb.create_sheet(out_tab)
 
     # Cores
     HEADER_FILL   = PatternFill("solid", fgColor="1F3864")
@@ -322,7 +337,7 @@ def main():
     ws_out.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{out_row - 1}"
 
     wb.save(EXCEL_PATH)
-    print(f"\nAba '{TAB_NAME}' criada com {out_row - 2} linhas.")
+    print(f"\nAba '{out_tab}' criada com {out_row - 2} linhas.")
     print(f"Arquivo salvo: {EXCEL_PATH}")
 
     # Resumo

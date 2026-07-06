@@ -57,10 +57,25 @@ do arquivo `Ecommerce.xlsx`. Cria uma aba de análise com status, alertas e core
 | Candidato | Amarelo | Inscrito como candidato — confirmar |
 | Fora | Vermelho | Não participa da campanha |
 
-**Lógica de alerta:**
-- Anúncio em ambas as campanhas → `"Julho ja programado — OK"` (normal, campaanha sobreposta)
+**Tipos de ID suportados na coluna A:**
+| Dígitos | Tipo | Exemplo | Comportamento |
+|---|---|---|---|
+| 7–13 | Anúncio individual | `3943414937` → `MLB3943414937` | Uma linha por anúncio |
+| 14+   | Grupo de variações | `8394429844084229` → `MLBU...` | Expande todas as variações, exibe linha resumo |
+
+**Filtro automático:**
+- Linhas com **"Estoque Encalhado"** na coluna R são ignoradas automaticamente.
+
+**Lógica de alerta (anúncios individuais):**
+- Anúncio em ambas as campanhas → `"Julho ja programado — OK"` (normal, campanha sobreposta)
 - Apenas na Junho sem Julho → `"EXPIRA AMANHA! Nao inscrito no Julho"` ⚠
 - Fora de ambas → `"Fora de ambas as campanhas"`
+
+**Lógica de alerta (grupos):**
+- Todas as variações com Julho → `"Todas as N variacoes com Julho OK"` (verde)
+- Parte das variações com Julho → `"X/N variacoes SEM Julho"` ⚠ (laranja)
+- Candidatas, sem confirmação → `"X/N candidatas — confirmar inscricao"` (amarelo)
+- Todas sem Julho, algumas na Junho → `"URGENTE! X/N apenas em Junho"` ⚠ (vermelho)
 
 ```bash
 # Curva B (padrão)

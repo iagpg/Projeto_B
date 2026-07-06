@@ -37,6 +37,9 @@ EXCEL_OUTPUT     = cfg["excel_output"]
 ml_access_token  = cfg.get("ml_access_token", "")
 ml_refresh_token = cfg["ml_refresh_token"]
 
+# Mapa family_id → [MLB IDs], populado uma única vez em main() quando necessário
+_family_map: dict = {}
+
 
 # ── ML helpers ────────────────────────────────────────────────────────────────
 
@@ -165,6 +168,56 @@ def ml_find_active_for_migrated(old_item_id):
     return unique_ids[0], summary
 
 
+def is_family_id(val) -> bool:
+    """Retorna True se val for um número puro com 14+ dígitos (family_id do ML)."""
+    s = str(val or "").strip()
+    return s.isdigit() and len(s) >= 14
+
+
+def build_family_map() -> dict:
+    """
+    Pagina todos os itens do vendedor e mapeia family_id → [MLB IDs].
+    A API ML ignora o filtro family_id no endpoint de busca; a única forma
+    confiável é buscar o campo item a item em lotes de 20.
+    """
+    print("  Mapeando family_ids dos itens do vendedor (necessario para grupos)...")
+    all_ids = []
+    offset  = 0
+    limit   = 50
+    while True:
+        r       = ml_get(f"https://api.mercadolibre.com/users/{ML_USER_ID}/items/search",
+                         {"limit": limit, "offset": offset})
+        data    = r.json()
+        results = data.get("results", [])
+        all_ids.extend(results)
+        total   = data.get("paging", {}).get("total", 0)
+        offset += limit
+        if offset >= total or not results:
+            break
+        time.sleep(0.1)
+    print(f"  Total de itens do vendedor: {len(all_ids)}")
+
+    family_map = {}
+    for i in range(0, len(all_ids), 20):
+        chunk = all_ids[i:i+20]
+        r     = ml_get("https://api.mercadolibre.com/items",
+                       {"ids": ",".join(chunk), "attributes": "id,family_id,status"})
+        data  = r.json()
+        if isinstance(data, list):
+            for entry in data:
+                body = entry.get("body", {}) if isinstance(entry, dict) else {}
+                fid  = str(body.get("family_id") or "").strip()
+                mlb  = body.get("id", "")
+                if fid and mlb:
+                    family_map.setdefault(fid, []).append(mlb)
+        time.sleep(0.1)
+
+    families = len(family_map)
+    mapped   = sum(len(v) for v in family_map.values())
+    print(f"  Familias encontradas: {families} | Itens com family_id: {mapped}")
+    return family_map
+
+
 def ml_get_active_in_group(item_group_id):
     """Given an item_group_id, return list of active MLB IDs in that group."""
     if not item_group_id:
@@ -273,11 +326,21 @@ def build_col_e(sku):
       red      = anúncio fechado no ML
       yellow   = cadastrado no Tiny, sem anúncio no ML
       purple   = não encontrado em nenhum sistema
-      blue     = migração encontrada
+      blue     = migração / family encontrada
       orange   = kit com variações ativas no ML
       dark_red = kit sem variações no ML / variações fechadas
     """
     sku_str = str(sku).strip()
+
+    # ── Family ID path (número puro 14+ dígitos) ─────────────────────────────
+    if is_family_id(sku_str):
+        members = _family_map.get(sku_str, [])
+        if members:
+            summary = ", ".join(members[:5])
+            if len(members) > 5:
+                summary += f" (+{len(members) - 5})"
+            return f"Migração encontrada: {sku_str} → {len(members)} variações: {summary}", "blue"
+        return f"Family ID {sku_str} — não encontrado", "purple"
 
     # ── MLB ID path ──────────────────────────────────────────────────────────
     if sku_str.upper().startswith("MLB"):
@@ -448,6 +511,15 @@ def main():
     print(f"Loading: {EXCEL_INPUT}")
     wb = load_workbook(EXCEL_INPUT)
     ws = wb.active
+
+    # Pré-scan: verifica se alguma linha tem family_id para construir o mapa
+    has_family = any(
+        is_family_id(row[3].value)
+        for row in ws.iter_rows(min_row=2)
+        if row[3].value is not None
+    )
+    if has_family:
+        _family_map.update(build_family_map())
 
     total   = 0
     updated = 0

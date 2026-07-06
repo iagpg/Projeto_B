@@ -8,6 +8,12 @@ Campanhas monitoradas:
   C-MLB4305989  "Junho ate Julho"  — expira 01/07/2026  ⚠ URGENTE
   C-MLB4586868  "Julho"            — inicia 01/07/2026, vai até 01/08/2026
 
+Tipos de linha suportados na coluna A:
+  - IDs individuais (7-13 dígitos) → MLB{id}
+  - Group IDs (14-16 dígitos)      → MLBU{id}, expande todas as variações
+
+Linhas com "Estoque Encalhado" na coluna R são ignoradas.
+
 Uso:
     python scripts/check_promotions.py        # padrão: Curva B
     python scripts/check_promotions.py --a    # Curva A
@@ -20,7 +26,6 @@ import json
 import sys
 import time
 from pathlib import Path
-from datetime import date
 
 import requests
 import openpyxl
@@ -38,7 +43,8 @@ BASE        = "https://api.mercadolibre.com"
 CAMP_JUNHO  = "C-MLB4305989"   # Junho ate Julho — expira 01/07
 CAMP_JULHO  = "C-MLB4586868"   # Julho           — inicia 01/07
 
-TODAY       = date.today()
+COL_ID      = 1    # Coluna A: IDs dos anúncios
+COL_STATUS  = 18   # Coluna R: classificação (ex: "Estoque Encalhado")
 
 _token = cfg.get("ml_access_token", "")
 
@@ -82,12 +88,12 @@ def _get(url, params=None, _retry=True):
 # ── ML helpers ────────────────────────────────────────────────────────────────
 
 def get_item_details_batch(mlb_ids):
-    """Busca título e preço de até 20 itens em uma chamada."""
+    """Busca título, preço e family_id de até 20 itens em uma chamada."""
     if not mlb_ids:
         return {}
     data = _get(f"{BASE}/items", {
         "ids":        ",".join(mlb_ids[:20]),
-        "attributes": "id,title,price,status",
+        "attributes": "id,title,price,status,family_id",
     })
     result = {}
     if isinstance(data, list):
@@ -104,29 +110,116 @@ def get_item_promotions(mlb_id):
     return data if isinstance(data, list) else []
 
 
-def parse_item_ids(raw_val):
-    """Extrai IDs válidos de uma célula (pode ter múltiplos separados por espaço)."""
+def build_family_map() -> dict:
+    """
+    Varre TODOS os itens do vendedor (paginado) e mapeia family_id → [MLB IDs].
+    Chamado uma única vez quando existem group IDs a resolver.
+    O parâmetro family_id no endpoint de busca é ignorado pela API ML;
+    a única forma confiável é buscar o campo family_id item a item.
+    """
+    print("  Mapeando familias dos itens do vendedor (necessario para grupos)...")
+    all_ids = []
+    offset  = 0
+    limit   = 50
+    while True:
+        data = _get(f"{BASE}/users/{USER_ID}/items/search",
+                    {"limit": limit, "offset": offset})
+        if not isinstance(data, dict):
+            break
+        results = data.get("results", [])
+        all_ids.extend(results)
+        total = data.get("paging", {}).get("total", 0)
+        offset += limit
+        if offset >= total or not results:
+            break
+        time.sleep(0.1)
+    print(f"  Total de itens do vendedor: {len(all_ids)}")
+
+    family_map = {}   # family_id (str) → [MLB IDs]
+    item_family = {}  # MLB ID → family_id  (usado para validação posterior)
+    for i in range(0, len(all_ids), 20):
+        chunk = all_ids[i:i+20]
+        data = _get(f"{BASE}/items", {
+            "ids":        ",".join(chunk),
+            "attributes": "id,family_id,title,status",
+        })
+        if isinstance(data, list):
+            for entry in data:
+                body = entry.get("body", {}) if isinstance(entry, dict) else {}
+                fid  = str(body.get("family_id") or "").strip()
+                mlb  = body.get("id", "")
+                if fid and mlb:
+                    family_map.setdefault(fid, []).append(mlb)
+                    item_family[mlb] = fid
+        time.sleep(0.1)
+
+    total_families = len(family_map)
+    total_mapped   = sum(len(v) for v in family_map.values())
+    print(f"  Familias encontradas: {total_families} | Itens mapeados: {total_mapped}")
+    return family_map
+
+
+def parse_cell_ids(raw_val):
+    """
+    Extrai IDs de uma célula. Retorna (item_ids, group_ids).
+      item_ids:  dígitos 7-13 (puro ou prefixo MLB)  → anúncios individuais
+      group_ids: dígitos 14+  (puro ou prefixo MLBU) → grupos de variações
+
+    Aceita formatos com ou sem prefixo:
+      - "3943414937"          → item
+      - "MLB3943414937"       → item
+      - "8394429844084229"    → grupo
+      - "MLBU8394429844084229"→ grupo (prefixo stripped automaticamente)
+    """
     if raw_val is None:
-        return []
+        return [], []
     raw = str(raw_val).strip()
-    parts = raw.split()
-    ids = []
-    for p in parts:
-        p = p.strip()
-        if p.isdigit() and 7 <= len(p) <= 13:
-            ids.append(p)
-    return ids
+    item_ids  = []
+    group_ids = []
+    for p in raw.split():
+        p = p.strip().upper()
+        # MLBU prefix → grupo
+        if p.startswith("MLBU"):
+            numeric = p[4:]
+            if numeric.isdigit() and len(numeric) >= 14:
+                group_ids.append(numeric)
+            continue
+        # MLB prefix → item individual
+        if p.startswith("MLB"):
+            numeric = p[3:]
+            if numeric.isdigit() and 7 <= len(numeric) <= 13:
+                item_ids.append(numeric)
+            continue
+        # Puramente numérico
+        if not p.isdigit():
+            continue
+        n = len(p)
+        if 7 <= n <= 13:
+            item_ids.append(p)
+        elif n >= 14:
+            group_ids.append(p)
+    return item_ids, group_ids
 
 
 def check_campaign(promotions, camp_id):
-    """Verifica se o item está ativo em uma campanha específica.
-    Retorna (in_campaign: bool, status: str, price: float|None)"""
+    """Verifica se o item está em uma campanha específica.
+    Retorna (in_campaign, status, price)."""
     for promo in promotions:
         if promo.get("id") == camp_id:
-            status = promo.get("status", "")
-            price  = promo.get("price") or None
-            return True, status, price
+            return True, promo.get("status", ""), promo.get("price") or None
     return False, None, None
+
+
+def camp_text(in_camp, camp_status, camp_price):
+    if not in_camp:
+        return "Fora"
+    if camp_status == "started":
+        return f"Ativa (R$ {camp_price:.2f})" if camp_price else "Ativa"
+    if camp_status == "pending":
+        return f"Inscrito (R$ {camp_price:.2f})" if camp_price else "Inscrito"
+    if camp_status == "candidate":
+        return "Candidato"
+    return camp_status or "—"
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -139,9 +232,9 @@ def main():
     group.add_argument("--c", dest="curva", action="store_const", const="C", help="Curva C")
     args = parser.parse_args()
 
-    curva     = args.curva or "B"
-    tab_name  = f"Curva {curva}"
-    out_tab   = f"Analise Promocoes {curva}"
+    curva    = args.curva or "B"
+    tab_name = f"Curva {curva}"
+    out_tab  = f"Analise Promocoes {curva}"
 
     _refresh()
     print(f"Token refreshed OK | Processando: {tab_name}")
@@ -152,39 +245,90 @@ def main():
     ws = wb[tab_name]
     print(f"{tab_name}: {ws.max_row - 1} linhas de dados")
 
-    # Coleta todos os IDs únicos
-    rows_data = []   # [(row_num, [item_ids])]
-    all_ids   = []   # para batch fetch de detalhes
+    # ── Coleta linhas ─────────────────────────────────────────────────────────
+    # rows_data: [(row_num, item_ids: [str], group_ids: [str])]
+    # item_ids  = dígitos sem prefixo (MLB será adicionado)
+    # group_ids = dígitos sem prefixo (MLBU será adicionado)
 
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=1):
-        cell = row[0]
-        ids  = parse_item_ids(cell.value)
-        if ids:
-            rows_data.append((cell.row, ids))
-            all_ids.extend(ids)
+    rows_data     = []
+    skipped       = 0
+    all_item_nums = []  # dígitos de IDs individuais
 
-    all_ids_unique = list(dict.fromkeys(all_ids))
-    print(f"IDs únicos encontrados: {len(all_ids_unique)}")
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=COL_STATUS):
+        cell_a = row[COL_ID - 1]      # coluna A
+        cell_r = row[COL_STATUS - 1]  # coluna R
 
-    # Batch fetch de detalhes (título/preço) em grupos de 20
+        r_val = str(cell_r.value or "").strip()
+        if "Estoque Encalhado" in r_val:
+            skipped += 1
+            continue
+
+        item_ids, group_ids = parse_cell_ids(cell_a.value)
+        if not item_ids and not group_ids:
+            continue
+
+        rows_data.append((cell_a.row, item_ids, group_ids))
+        all_item_nums.extend(item_ids)
+
+    print(f"Linhas validas: {len(rows_data)} | Ignoradas (Encalhado): {skipped}")
+
+    # ── Expande grupos → IDs de variações via family_id ──────────────────────
+
+    group_cache   = {}  # gid (numeric str) → [MLB..., ...]
+    unique_groups = list(dict.fromkeys(gid for _, _, gids in rows_data for gid in gids))
+    all_group_mlbs = []  # MLB IDs vindos de grupos
+
+    family_map = {}
+    if unique_groups:
+        family_map = build_family_map()
+
+    for gid in unique_groups:
+        members = family_map.get(gid, [])
+        group_cache[gid] = members
+        all_group_mlbs.extend(members)
+        status_str = f"{len(members)} variacoes" if members else "NAO ENCONTRADO — verificar family_id"
+        print(f"  Grupo {gid}: {status_str}")
+
+    # Todos os MLB IDs únicos (individuais + membros de grupo)
+    all_mlb_unique = list(dict.fromkeys(
+        [f"MLB{n}" for n in all_item_nums] + all_group_mlbs
+    ))
+    print(f"IDs unicos totais: {len(all_mlb_unique)}")
+
+    # ── Batch fetch de detalhes (título / preço) ──────────────────────────────
+
     details_cache = {}
-    mlb_ids_full = [f"MLB{i}" for i in all_ids_unique]
-    for i in range(0, len(mlb_ids_full), 20):
-        chunk = mlb_ids_full[i:i+20]
-        batch = get_item_details_batch(chunk)
+    for i in range(0, len(all_mlb_unique), 20):
+        batch = get_item_details_batch(all_mlb_unique[i:i+20])
         details_cache.update(batch)
         time.sleep(0.2)
     print(f"Detalhes obtidos: {len(details_cache)}")
 
-    # Processa promoções por item
-    promotions_cache = {}
-    for idx, mlb_id in enumerate(mlb_ids_full):
-        print(f"  [{idx+1}/{len(mlb_ids_full)}] {mlb_id} ...", end=" ", flush=True)
+    # Valida membros do grupo usando o family_id retornado no detalhe do item.
+    # Como o family_map foi construído com o mesmo atributo, a consistência
+    # já está garantida — mas verificamos se o detalhe confirmou o family_id.
+    for gid in unique_groups:
+        raw_list  = group_cache.get(gid, [])
+        validated = [
+            mlb_id for mlb_id in raw_list
+            if str(details_cache.get(mlb_id, {}).get("family_id") or "").strip() == gid
+        ]
+        descartados = len(raw_list) - len(validated)
+        if descartados:
+            print(f"  [AVISO] grupo {gid}: {descartados} itens descartados (family_id divergente)")
+        group_cache[gid] = validated
+        print(f"  Grupo {gid}: {len(validated)} variacoes confirmadas")
+
+    # ── Fetch de promoções por item ───────────────────────────────────────────
+
+    promotions_cache = {}  # MLB... → [promo, ...]
+    for idx, mlb_id in enumerate(all_mlb_unique):
+        print(f"  [{idx+1}/{len(all_mlb_unique)}] {mlb_id} ...", end=" ", flush=True)
         promos = get_item_promotions(mlb_id)
         promotions_cache[mlb_id] = promos
-        in_j, _, _ = check_campaign(promos, CAMP_JUNHO)
-        in_jul, _, _ = check_campaign(promos, CAMP_JULHO)
         flags = []
+        in_j, _, _   = check_campaign(promos, CAMP_JUNHO)
+        in_jul, _, _ = check_campaign(promos, CAMP_JULHO)
         if in_j:   flags.append("JUNHO")
         if in_jul: flags.append("JULHO")
         print(", ".join(flags) if flags else "sem campanha")
@@ -196,18 +340,16 @@ def main():
         del wb[out_tab]
     ws_out = wb.create_sheet(out_tab)
 
-    # Cores
-    HEADER_FILL   = PatternFill("solid", fgColor="1F3864")
-    RED_FILL      = PatternFill("solid", fgColor="FF4444")
-    ORANGE_FILL   = PatternFill("solid", fgColor="FFB347")
-    GREEN_FILL    = PatternFill("solid", fgColor="92D050")
-    YELLOW_FILL   = PatternFill("solid", fgColor="FFFF99")
-    GRAY_FILL     = PatternFill("solid", fgColor="D9D9D9")
-    WHITE_FILL    = PatternFill("solid", fgColor="FFFFFF")
+    HEADER_FILL = PatternFill("solid", fgColor="1F3864")
+    RED_FILL    = PatternFill("solid", fgColor="FF4444")
+    ORANGE_FILL = PatternFill("solid", fgColor="FFB347")
+    GREEN_FILL  = PatternFill("solid", fgColor="92D050")
+    YELLOW_FILL = PatternFill("solid", fgColor="FFFF99")
+    GRAY_FILL   = PatternFill("solid", fgColor="D9D9D9")
+    BLUE_FILL   = PatternFill("solid", fgColor="BDD7EE")  # fundo de linhas de grupo
 
-    # Headers
     headers = [
-        "MLB ID",
+        "MLB ID / Grupo",
         "Título",
         "Preço Atual (R$)",
         "Status ML",
@@ -217,122 +359,219 @@ def main():
     ]
 
     for col, h in enumerate(headers, 1):
-        cell = ws_out.cell(row=1, column=col, value=h)
-        cell.fill = HEADER_FILL
-        cell.font = Font(bold=True, color="FFFFFF", size=10)
-        cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+        c = ws_out.cell(row=1, column=col, value=h)
+        c.fill      = HEADER_FILL
+        c.font      = Font(bold=True, color="FFFFFF", size=10)
+        c.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
 
     ws_out.row_dimensions[1].height = 36
-
-    # Larguras de coluna
-    col_widths = [16, 52, 16, 12, 20, 20, 40]
-    for col, w in enumerate(col_widths, 1):
+    for col, w in enumerate([18, 52, 16, 12, 20, 20, 48], 1):
         ws_out.column_dimensions[get_column_letter(col)].width = w
 
-    # Preenche linhas
-    out_row = 2
-    seen_ids = set()
+    # ── Helpers de escrita ────────────────────────────────────────────────────
 
-    for row_num, item_ids in rows_data:
-        for raw_id in item_ids:
-            mlb_id = f"MLB{raw_id}"
-            if mlb_id in seen_ids:
-                continue
-            seen_ids.add(mlb_id)
+    out_row     = 2
+    seen_items  = set()
+    seen_groups = set()
 
-            detail = details_cache.get(mlb_id, {})
-            title  = detail.get("title", "— não encontrado —")
-            price  = detail.get("price")
-            status_ml = detail.get("status", "—")
+    def _junho_fill(in_junho, junho_status, julho_confirmado):
+        if in_junho and junho_status == "started" and not julho_confirmado:
+            return ORANGE_FILL
+        if in_junho:
+            return YELLOW_FILL
+        return GRAY_FILL
 
-            promos = promotions_cache.get(mlb_id, [])
-            in_junho, junho_status, junho_price = check_campaign(promos, CAMP_JUNHO)
-            in_julho, julho_status, julho_price = check_campaign(promos, CAMP_JULHO)
+    def _julho_fill(in_julho, julho_status, julho_confirmado):
+        if julho_confirmado:
+            return GREEN_FILL
+        if in_julho and julho_status == "candidate":
+            return YELLOW_FILL
+        return RED_FILL
 
-            # Texto das células de campanha
-            def camp_text(in_camp, camp_status, camp_price):
-                if not in_camp:
-                    return "Fora"
-                if camp_status == "started":
-                    return f"Ativa (R$ {camp_price:.2f})" if camp_price else "Ativa"
-                if camp_status == "pending":
-                    return f"Inscrito (R$ {camp_price:.2f})" if camp_price else "Inscrito"
-                if camp_status == "candidate":
-                    return "Candidato"
-                return camp_status or "—"
+    def _alerta_style(alerta_text, alerta_urgente):
+        if alerta_urgente:
+            return ORANGE_FILL, Font(bold=True, color="880000")
+        if "Fora de ambas" in alerta_text or "Verificar" in alerta_text:
+            return RED_FILL, Font(color="880000")
+        if "Candidato" in alerta_text:
+            return YELLOW_FILL, Font(color="664400")
+        return GREEN_FILL, Font(color="1A5C1A")
 
-            junho_text = camp_text(in_junho, junho_status, junho_price)
-            julho_text = camp_text(in_julho, julho_status, julho_price)
+    def write_item_row(mlb_id):
+        nonlocal out_row
+        if mlb_id in seen_items:
+            return
+        seen_items.add(mlb_id)
 
-            # Alerta — lógica correta de campanhas simultâneas
-            julho_confirmado = in_julho and julho_status in ("started", "pending")
+        detail    = details_cache.get(mlb_id, {})
+        title     = detail.get("title", "— não encontrado —")
+        price     = detail.get("price")
+        status_ml = detail.get("status", "—")
 
-            if julho_confirmado and in_junho and junho_status == "started":
-                # Ambas ativas: Julho já garante continuidade, Junho expira sem problema
-                alerta_text = "Julho ja programado — OK"
-                alerta_urgente = False
-            elif julho_confirmado:
-                alerta_text = "Julho ativo — OK"
-                alerta_urgente = False
-            elif in_julho and julho_status == "candidate":
-                alerta_text = "Candidato ao Julho — confirmar inscricao"
-                alerta_urgente = False
-            elif in_junho and junho_status == "started":
-                # Na Junho mas SEM Julho garantido — urgente
-                alerta_text = "EXPIRA AMANHA! Nao inscrito no Julho"
-                alerta_urgente = True
-            elif not in_junho and not in_julho:
-                alerta_text = "Fora de ambas as campanhas"
-                alerta_urgente = False
-            else:
-                alerta_text = "Verificar"
-                alerta_urgente = False
+        promos = promotions_cache.get(mlb_id, [])
+        in_junho, junho_status, junho_price = check_campaign(promos, CAMP_JUNHO)
+        in_julho, julho_status, julho_price = check_campaign(promos, CAMP_JULHO)
+        julho_confirmado = in_julho and julho_status in ("started", "pending")
 
-            # Fills
-            if in_junho and junho_status == "started" and not julho_confirmado:
-                junho_fill = ORANGE_FILL   # urgente: Junho expira sem Julho
-            elif in_junho and junho_status == "started":
-                junho_fill = YELLOW_FILL   # Junho ativa mas Julho ja garantido
-            elif in_junho:
-                junho_fill = YELLOW_FILL
-            else:
-                junho_fill = GRAY_FILL
+        junho_t = camp_text(in_junho, junho_status, junho_price)
+        julho_t = camp_text(in_julho, julho_status, julho_price)
 
-            if julho_confirmado:
-                julho_fill = GREEN_FILL
-            elif in_julho and julho_status == "candidate":
-                julho_fill = YELLOW_FILL
-            else:
-                julho_fill = RED_FILL
+        if julho_confirmado and in_junho and junho_status == "started":
+            alerta_text    = "Julho ja programado — OK"
+            alerta_urgente = False
+        elif julho_confirmado:
+            alerta_text    = "Julho ativo — OK"
+            alerta_urgente = False
+        elif in_julho and julho_status == "candidate":
+            alerta_text    = "Candidato ao Julho — confirmar inscricao"
+            alerta_urgente = False
+        elif in_junho and junho_status == "started":
+            alerta_text    = "EXPIRA AMANHA! Nao inscrito no Julho"
+            alerta_urgente = True
+        elif not in_junho and not in_julho:
+            alerta_text    = "Fora de ambas as campanhas"
+            alerta_urgente = False
+        else:
+            alerta_text    = "Verificar"
+            alerta_urgente = False
 
-            # Escreve linha
-            values = [mlb_id, title, price, status_ml, junho_text, julho_text, alerta_text]
-            for col, val in enumerate(values, 1):
-                c = ws_out.cell(row=out_row, column=col, value=val)
-                c.alignment = Alignment(vertical="center", wrap_text=(col in (2, 7)))
-                if col == 1:
-                    c.font = Font(bold=True)
-                if col == 5:
-                    c.fill = junho_fill
-                elif col == 6:
-                    c.fill = julho_fill
-                elif col == 7:
-                    if alerta_urgente:
-                        c.fill = ORANGE_FILL
-                        c.font = Font(bold=True, color="880000")
-                    elif "Fora de ambas" in alerta_text or "Verificar" in alerta_text:
-                        c.fill = RED_FILL
-                        c.font = Font(color="880000")
-                    elif "Candidato" in alerta_text:
-                        c.fill = YELLOW_FILL
-                        c.font = Font(color="664400")
-                    else:
-                        c.fill = GREEN_FILL
-                        c.font = Font(color="1A5C1A")
+        j6_fill  = _junho_fill(in_junho, junho_status, julho_confirmado)
+        j7_fill  = _julho_fill(in_julho, julho_status, julho_confirmado)
+        a_fill, a_font = _alerta_style(alerta_text, alerta_urgente)
 
+        values = [mlb_id, title, price, status_ml, junho_t, julho_t, alerta_text]
+        for col, val in enumerate(values, 1):
+            c = ws_out.cell(row=out_row, column=col, value=val)
+            c.alignment = Alignment(vertical="center", wrap_text=(col in (2, 7)))
+            if col == 1:
+                c.font = Font(bold=True)
+            elif col == 5:
+                c.fill = j6_fill
+            elif col == 6:
+                c.fill = j7_fill
+            elif col == 7:
+                c.fill = a_fill
+                c.font = a_font
+
+        out_row += 1
+
+    def write_group_row(gid):
+        nonlocal out_row
+        if gid in seen_groups:
+            return
+        seen_groups.add(gid)
+
+        mlbu_id = f"MLBU{gid}"
+        members = group_cache.get(gid, [])
+        total   = len(members)
+
+        if total == 0:
+            c = ws_out.cell(row=out_row, column=1, value=gid)
+            c.font = Font(bold=True, italic=True)
+            ws_out.cell(row=out_row, column=2, value="— grupo sem variacoes validadas —")
+            ws_out.cell(row=out_row, column=7, value="Grupo vazio / erro de validacao")
+            for col in range(1, 8):
+                ws_out.cell(row=out_row, column=col).fill = GRAY_FILL
             out_row += 1
+            return
 
-    # Congela header e adiciona filtro
+        # Agrega status de todas as variações
+        julho_ok   = 0
+        candidatos = 0
+        junho_only = 0
+        fora_ambas = 0
+        has_junho  = 0
+        first_title = None
+
+        for mlb_id in members:
+            promos = promotions_cache.get(mlb_id, [])
+            in_j,  j_st,  _ = check_campaign(promos, CAMP_JUNHO)
+            in_jul, jul_st, _ = check_campaign(promos, CAMP_JULHO)
+            jul_ok = in_jul and jul_st in ("started", "pending")
+
+            if in_j:
+                has_junho += 1
+            if jul_ok:
+                julho_ok += 1
+            elif in_jul and jul_st == "candidate":
+                candidatos += 1
+            elif in_j and j_st == "started":
+                junho_only += 1
+            else:
+                fora_ambas += 1
+
+            if first_title is None:
+                first_title = details_cache.get(mlb_id, {}).get("title", "")
+
+        base_title = first_title or mlbu_id
+        if len(base_title) > 38:
+            base_title = base_title[:38] + "…"
+        display_title = f"{base_title} (grupo, {total} var.)"
+
+        junho_resumo = f"{has_junho}/{total} em Junho"
+        julho_resumo = f"{julho_ok}/{total} com Julho"
+
+        if julho_ok == total:
+            alerta_text    = f"Todas as {total} variacoes com Julho OK"
+            alerta_urgente = False
+            j7_fill        = GREEN_FILL
+            a_fill         = GREEN_FILL
+            a_font         = Font(bold=True, color="1A5C1A")
+        elif julho_ok > 0:
+            faltam         = total - julho_ok
+            alerta_text    = f"{faltam}/{total} variacoes SEM Julho"
+            alerta_urgente = True
+            j7_fill        = ORANGE_FILL
+            a_fill         = ORANGE_FILL
+            a_font         = Font(bold=True, color="880000")
+        elif candidatos > 0:
+            alerta_text    = f"{candidatos}/{total} candidatas — confirmar inscricao"
+            alerta_urgente = False
+            j7_fill        = YELLOW_FILL
+            a_fill         = YELLOW_FILL
+            a_font         = Font(color="664400")
+        elif junho_only > 0:
+            alerta_text    = f"URGENTE! {junho_only}/{total} apenas em Junho"
+            alerta_urgente = True
+            j7_fill        = RED_FILL
+            a_fill         = ORANGE_FILL
+            a_font         = Font(bold=True, color="880000")
+        else:
+            alerta_text    = f"Nenhuma variacao em campanha"
+            alerta_urgente = False
+            j7_fill        = RED_FILL
+            a_fill         = RED_FILL
+            a_font         = Font(color="880000")
+
+        j6_fill = (ORANGE_FILL if junho_only > 0 and julho_ok < total
+                   else YELLOW_FILL if has_junho > 0
+                   else GRAY_FILL)
+
+        values = [gid, display_title, None, "grupo", junho_resumo, julho_resumo, alerta_text]
+        for col, val in enumerate(values, 1):
+            c = ws_out.cell(row=out_row, column=col, value=val)
+            c.alignment = Alignment(vertical="center", wrap_text=(col in (2, 7)))
+            c.fill = BLUE_FILL  # fundo padrão azul claro para linhas de grupo
+            if col == 1:
+                c.font = Font(bold=True, italic=True)
+            elif col == 5:
+                c.fill = j6_fill
+            elif col == 6:
+                c.fill = j7_fill
+            elif col == 7:
+                c.fill = a_fill
+                c.font = a_font
+
+        out_row += 1
+
+    # ── Escreve todas as linhas na ordem da planilha ──────────────────────────
+
+    for _, item_ids, group_ids in rows_data:
+        for raw_id in item_ids:
+            write_item_row(f"MLB{raw_id}")
+        for gid in group_ids:
+            write_group_row(gid)
+
     ws_out.freeze_panes = "A2"
     ws_out.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{out_row - 1}"
 
@@ -340,28 +579,27 @@ def main():
     print(f"\nAba '{out_tab}' criada com {out_row - 2} linhas.")
     print(f"Arquivo salvo: {EXCEL_PATH}")
 
-    # Resumo
-    total   = out_row - 2
+    # ── Resumo ────────────────────────────────────────────────────────────────
+
     def _has(promos, camp_id, statuses=None):
-        for p in promos:
-            if p.get("id") == camp_id:
-                return statuses is None or p.get("status") in statuses
-        return False
+        return any(p.get("id") == camp_id and (statuses is None or p.get("status") in statuses)
+                   for p in promos)
 
-    julho_ok    = sum(1 for r in promotions_cache.values()
-                      if _has(r, CAMP_JULHO, ("started", "pending")))
-    junho_only  = sum(1 for r in promotions_cache.values()
-                      if _has(r, CAMP_JUNHO, ("started",))
-                      and not _has(r, CAMP_JULHO, ("started", "pending")))
-    fora_ambas  = sum(1 for r in promotions_cache.values()
-                      if not _has(r, CAMP_JUNHO) and not _has(r, CAMP_JULHO))
+    total_items    = len(all_mlb_unique)
+    julho_ok_cnt   = sum(1 for p in promotions_cache.values() if _has(p, CAMP_JULHO, ("started", "pending")))
+    junho_only_cnt = sum(1 for p in promotions_cache.values()
+                         if _has(p, CAMP_JUNHO, ("started",)) and not _has(p, CAMP_JULHO, ("started", "pending")))
+    fora_cnt       = sum(1 for p in promotions_cache.values() if not _has(p, CAMP_JUNHO) and not _has(p, CAMP_JULHO))
 
-    print(f"\n{'='*52}")
-    print(f"  Total anuncios analisados : {total}")
-    print(f"  Julho ja garantido (OK)   : {julho_ok}")
-    print(f"  Apenas Junho (URGENTE!)   : {junho_only}  *** sem Julho programado ***")
-    print(f"  Fora de ambas campanhas   : {fora_ambas}")
-    print(f"{'='*52}")
+    print(f"\n{'='*54}")
+    print(f"  Anuncios analisados (incl. variacoes) : {total_items}")
+    print(f"  Linhas na aba gerada                  : {out_row - 2}")
+    print(f"  Grupos expandidos                     : {len(unique_groups)}")
+    print(f"  Ignorados (Estoque Encalhado)          : {skipped}")
+    print(f"  Julho ja garantido (OK)               : {julho_ok_cnt}")
+    print(f"  Apenas Junho (URGENTE!)               : {junho_only_cnt}")
+    print(f"  Fora de ambas campanhas               : {fora_cnt}")
+    print(f"{'='*54}")
 
 
 if __name__ == "__main__":

@@ -234,6 +234,119 @@ Arquivo de configuração na raiz. Contém credenciais e paths.
 | `tiny_v3_client_secret` | Secret do Tiny ERP v3 |
 | `excel_input` | Caminho absoluto para o Excel de entrada |
 | `excel_output` | Caminho absoluto para o Excel de saída |
+| `google_client_id` | OAuth2 Client ID do Google Cloud (Desktop app) |
+| `google_client_secret` | OAuth2 Client Secret do Google Cloud |
+| `gestao_sheet_id` | ID da planilha "BouwObra - Plataforma de Gestão" |
+| `icms_venda_pct` | Alíquota de ICMS sobre vendas em % (ex: `12.0`) |
+| `ml_taxa_default_pct` | Taxa ML padrão caso API de fees não responda (ex: `12.0`) |
+
+---
+
+## Plataforma de Gestão (Google Sheets)
+
+### `populate_gestao.py`
+Popula a planilha Google Sheets "BouwObra - Plataforma de Gestão" com:
+- **Aba Precificação**: custo real (via NF Tiny), encargos fiscais e margem líquida por produto
+- **Aba Dashboard**: KPIs de vendas do Mercado Livre
+
+**Fórmulas fiscais (Lucro Real):**
+| Campo | Fórmula |
+|---|---|
+| Custo NF c/ IPI | `(valor_NF / qtd) + IPI` |
+| ICMS Compra crédito | `custo_base × ICMS_NF%` (0 se ST) |
+| PIS/COFINS Compra crédito | `custo_base × 1,65% / 7,60%` |
+| Imposto Recuperável | soma dos créditos de compra |
+| ICMS/PIS/COFINS Venda | sobre Preço de Venda |
+| Margem Líquida | `PV − ML − Impostos venda − Custo + Créditos` |
+
+**Colunas da aba Precificação (A a U):**
+ID ML · SKU · Nome · Categoria · Preço Venda · Taxa ML% · RT% · Frete · ICMS Venda · PIS Venda · COFINS Venda · Comissão+Frete ML · Custo NF · ICMS Crédito · PIS Crédito · COFINS Crédito · Imposto Recuperável · **Margem R$** · **Margem %** · Status · Atualização
+
+**Coloração por margem:** Verde ≥20% · Amarelo 10–20% · Vermelho <10%
+
+```bash
+# Executar pipeline completo
+python scripts/populate_gestao.py
+
+# Sem varredura de NFs (teste rápido, custo = 0)
+python scripts/populate_gestao.py --skip-nf
+
+# Sem busca de pedidos (não atualiza Dashboard)
+python scripts/populate_gestao.py --skip-orders
+```
+
+---
+
+### `probe_tiny_nf.py`
+Diagnóstico da API Tiny v3 para Notas Fiscais.
+Exibe a estrutura bruta da resposta para verificar nomes de campos.
+**Rodar antes do primeiro `populate_gestao.py`** para confirmar que o módulo
+`connectors/tiny/nf.py` lê os campos corretos.
+
+```bash
+python scripts/probe_tiny_nf.py
+```
+
+---
+
+## Setup Google Sheets (uma vez)
+
+### `connectors/google_sheets/auth.py`
+Autoriza o acesso à planilha Google via OAuth2 browser flow.
+Salva o token em `google_token.json` na raiz do projeto.
+
+**Pré-requisitos:**
+1. Acessar [console.cloud.google.com](https://console.cloud.google.com)
+2. Habilitar **Google Sheets API**
+3. Criar credenciais OAuth2 → tipo **Desktop app**
+4. Copiar `client_id` e `client_secret` para `config.json`
+
+```bash
+python connectors/google_sheets/auth.py
+```
+
+---
+
+## Apps Script — BouwObra Plataforma de Gestão
+
+O sistema operacional da planilha **"BouwObra - Plataforma de Gestão"** roda 100% dentro do
+Google Apps Script — sem executar código local.
+
+### Arquivos em `d:\backend\apps_script\`
+
+| Arquivo | Conteúdo |
+|---|---|
+| `01_Config.gs` | Constantes globais (URLs, alíquotas, nomes de aba, cabeçalhos) |
+| `02_Auth.gs` | Tokens ML e Tiny + helpers HTTP (`mlGet`, `tinyGet`, `fetchAll`) |
+| `03_TinyApi.gs` | Notas Fiscais de entrada → `atualizarCacheNF()` + `lerCacheNF()` |
+| `04_MlApi.gs` | Anúncios, pedidos e taxas ML |
+| `05_Precificacao.gs` | Fórmulas Lucro Real + escrita da aba Precificação |
+| `06_Dashboard.gs` | KPIs de vendas + escrita da aba Dashboard |
+| `07_Menu.gs` | Menu "BouwObra", trigger diário e funções de diagnóstico |
+
+### Instalação (passo a passo)
+
+1. Abrir a planilha **"BouwObra - Plataforma de Gestão"** no Google Sheets
+2. Menu **Extensões → Apps Script**
+3. Criar um arquivo `.gs` para cada arquivo da pasta `apps_script/`, colando o conteúdo
+4. Salvar todos os arquivos
+5. Executar a função **`inicializarConfiguracoes`** (uma vez): gravar tokens ML e Tiny
+6. Executar **`atualizarCacheNF`** para popular o cache de custos das NFs Tiny
+7. Executar **`sincronizarTudo`** ou usar o menu **BouwObra → Sincronizar Tudo**
+8. Opcional: **BouwObra → Instalar Trigger Diário** para sync automático às 6h
+
+### Funções disponíveis no menu BouwObra
+
+| Função | Descrição |
+|---|---|
+| `sincronizarTudo` | Cache NF + Precificação + Dashboard em sequência |
+| `atualizarCacheNF` | Varre NFs de entrada do Tiny (últimos 12 meses) |
+| `atualizarPrecificacao` | Calcula margens e grava aba Precificação |
+| `atualizarDashboard` | Busca KPIs ML e grava aba Dashboard |
+| `inicializarConfiguracoes` | Grava tokens nas propriedades do script (rodar 1×) |
+| `instalarTriggerDiario` | Agenda sync automático diário às 6h |
+| `testarConexaoML` | Diagnóstico: testa token ML |
+| `testarConexaoTiny` | Diagnóstico: testa token Tiny |
 
 ---
 

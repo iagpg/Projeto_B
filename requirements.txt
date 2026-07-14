@@ -1,2 +1,4 @@
 requests
 openpyxl
+gspread
+google-auth-oauthlib

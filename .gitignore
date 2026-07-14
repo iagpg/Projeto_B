@@ -1,0 +1,18 @@
+# Tokens e credenciais — nunca versionar
+tiny_token.json
+google_token.json
+config.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# Outputs gerados
+output/
+*.xlsx

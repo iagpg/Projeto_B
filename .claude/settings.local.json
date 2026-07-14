@@ -11,7 +11,11 @@
       "Bash(python scripts/check_promotions.py)",
       "Bash(python scripts/check_promotions.py --b)",
       "Bash(python scripts/check_promotions.py --a)",
-      "Bash(python scripts/check_promotions.py --d)"
+      "Bash(python scripts/check_promotions.py --d)",
+      "PowerShell(node --version)",
+      "PowerShell(npm --version)",
+      "PowerShell(clasp --version 2>$null)",
+      "PowerShell(npm install -g @google/clasp)"
     ],
     "additionalDirectories": [
       "d:\\backend"

@@ -15,7 +15,9 @@
       "PowerShell(node --version)",
       "PowerShell(npm --version)",
       "PowerShell(clasp --version 2>$null)",
-      "PowerShell(npm install -g @google/clasp)"
+      "PowerShell(npm install -g @google/clasp)",
+      "Bash(git add *)",
+      "Bash(git commit --amend -m ' *)"
     ],
     "additionalDirectories": [
       "d:\\backend"

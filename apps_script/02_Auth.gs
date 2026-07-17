@@ -8,25 +8,24 @@ function getProps() {
 
 // ── Setup inicial (rodar UMA VEZ) ─────────────────────────────────────────────
 
+// inicializarConfiguracoes está em credentials_local.gs (gitignored).
+// Copie o template abaixo, salve como credentials_local.gs e preencha os valores.
+/*
 function inicializarConfiguracoes() {
-  // Preencha os valores abaixo e execute esta função UMA VEZ no Apps Script.
-  // Após salvar, os tokens ficam no PropertiesService (criptografados pelo Google)
-  // e este arquivo pode ficar sem segredos no repositório Git.
   getProps().setProperties({
-    // Mercado Livre
-    'ML_CLIENT_ID':     '',
-    'ML_CLIENT_SECRET': '',
-    'ML_USER_ID':       '',
-    'ML_ACCESS_TOKEN':  '',
-    'ML_REFRESH_TOKEN': '',
-    // Tiny ERP
-    'TINY_CLIENT_ID':     '',
-    'TINY_CLIENT_SECRET': '',
-    'TINY_ACCESS_TOKEN':  '',
-    'TINY_REFRESH_TOKEN': '',
+    'ML_CLIENT_ID':       'SEU_ML_CLIENT_ID',
+    'ML_CLIENT_SECRET':   'SEU_ML_CLIENT_SECRET',
+    'ML_USER_ID':         'SEU_ML_USER_ID',
+    'ML_ACCESS_TOKEN':    'SEU_ML_ACCESS_TOKEN',
+    'ML_REFRESH_TOKEN':   'SEU_ML_REFRESH_TOKEN',
+    'TINY_CLIENT_ID':     'SEU_TINY_CLIENT_ID',
+    'TINY_CLIENT_SECRET': 'SEU_TINY_CLIENT_SECRET',
+    'TINY_ACCESS_TOKEN':  'SEU_TINY_ACCESS_TOKEN',
+    'TINY_REFRESH_TOKEN': 'SEU_TINY_REFRESH_TOKEN',
   });
-  SpreadsheetApp.getActiveSpreadsheet().toast('✅ Configurações salvas com sucesso!', 'BouwObra');
+  SpreadsheetApp.getActiveSpreadsheet().toast('✅ Configurações salvas!', 'BouwObra');
 }
+*/
 
 // ── URL builder ───────────────────────────────────────────────────────────────
 
@@ -131,16 +130,32 @@ function tinyGet(path, params, retry) {
   return JSON.parse(resp.getContentText());
 }
 
-// Busca múltiplas NFs em paralelo (fetchAll)
+// Busca múltiplas NFs em paralelo (fetchAll) — endpoint correto: /notas/{id}
 function tinyGetNfsParalelo(nfIds) {
   const p = getProps();
   const token = p.getProperty('TINY_ACCESS_TOKEN');
   const requests = nfIds.map(id => ({
-    url: `${TINY_BASE}/notas-fiscais/${id}`,
+    url: `${TINY_BASE}/notas/${id}`,
     headers: { 'Authorization': 'Bearer ' + token },
     muteHttpExceptions: true,
   }));
-  return UrlFetchApp.fetchAll(requests).map((resp, i) => {
+  return UrlFetchApp.fetchAll(requests).map(resp => {
+    if (resp.getResponseCode() !== 200) return null;
+    try { return JSON.parse(resp.getContentText()); } catch(e) { return null; }
+  });
+}
+
+// Busca detalhes de itens individuais em paralelo — GET /notas/{nfId}/itens/{idItem}
+// pairs: [{nfId, idItem}]
+function tinyGetItensParalelo(pairs) {
+  const p = getProps();
+  const token = p.getProperty('TINY_ACCESS_TOKEN');
+  const requests = pairs.map(({ nfId, idItem }) => ({
+    url: `${TINY_BASE}/notas/${nfId}/itens/${idItem}`,
+    headers: { 'Authorization': 'Bearer ' + token },
+    muteHttpExceptions: true,
+  }));
+  return UrlFetchApp.fetchAll(requests).map(resp => {
     if (resp.getResponseCode() !== 200) return null;
     try { return JSON.parse(resp.getContentText()); } catch(e) { return null; }
   });

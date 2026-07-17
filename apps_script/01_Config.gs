@@ -45,8 +45,18 @@ const HEADERS_PREC = [
 
 const MARGEM_COL_IDX = 18; // índice 0-based da coluna Margem %
 
-// Cabeçalhos do Cache NF
+// Abas auxiliares
+const ABA_ALERTAS = 'Alertas';
+
+// Cabeçalhos do Cache NF — 9 colunas com valores absolutos (R$)
 const HEADERS_CACHE_NF = [
-  'SKU', 'Custo Base (R$)', 'IPI (%)', 'ICMS Compra (%)',
-  'NF Número', 'NF Data', 'Atualizado em'
+  'SKU',               // A 0
+  'Custo Base (R$)',   // B 1
+  'IPI (R$)',          // C 2
+  'ICMS Crédito (R$)', // D 3
+  'PIS Crédito (R$)',  // E 4
+  'COFINS Crédito (R$)', // F 5
+  'NF Número',         // G 6
+  'NF Data',           // H 7
+  'Atualizado em',     // I 8
 ];

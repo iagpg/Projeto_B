@@ -60,19 +60,31 @@ def _access_token() -> str:
     return _refresh()
 
 
+_RETRY_DELAYS = (2, 5, 15, 30)  # segundos de espera a cada tentativa de 429
+
+
 def get(path: str, params: dict | None = None, retry: bool = True):
     token = _access_token()
-    r = requests.get(
-        f"{_BASE}{path}",
-        headers={"Authorization": f"Bearer {token}"},
-        params=params or {},
-        timeout=15,
-    )
-    if r.status_code == 401 and retry:
-        _refresh()
-        return get(path, params, retry=False)
-    r.raise_for_status()
-    return r.json()
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None)):
+        r = requests.get(
+            f"{_BASE}{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params or {},
+            timeout=20,
+        )
+        if r.status_code == 401 and retry:
+            token = _refresh()
+            retry = False
+            continue
+        if r.status_code == 429:
+            if delay is None:
+                r.raise_for_status()
+            wait = delay + attempt  # leve backoff adicional
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r.raise_for_status()  # não alcançado, mas satisfaz o linter
 
 
 # ── Funções de alto nível ─────────────────────────────────────────────────────

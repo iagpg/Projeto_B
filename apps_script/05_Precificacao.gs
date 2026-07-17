@@ -22,16 +22,18 @@ function calcularLinha(sku, mlData, custoData, timestamp) {
   const pisVenda    = _r2(preco * PIS_VENDA);
   const cofinsVenda = _r2(preco * COFINS_VENDA);
 
-  // Custo e créditos fiscais da compra
+  // Custo e créditos fiscais da compra — valores absolutos da NF
   let custoNf = 0, icmsCred = 0, pisCred = 0, cofinsCred = 0, impRecup = 0;
   if (custoData) {
-    const custoBase = parseFloat(custoData.custoBase) || 0;
-    const ipiPct    = parseFloat(custoData.ipiPct)    || 0;
-    const icmsPct   = parseFloat(custoData.icmsPct)   || 0;
-    custoNf    = _r2(custoBase * (1 + ipiPct / 100));
-    icmsCred   = _r2(custoBase * icmsPct / 100);       // 0 se ST
-    pisCred    = _r2(custoBase * PIS_COMPRA);
-    cofinsCred = _r2(custoBase * COFINS_COMPRA);
+    const custoBase     = parseFloat(custoData.custoBase)     || 0;
+    const ipiValor      = parseFloat(custoData.ipiValor)      || 0;
+    const icmsCredito   = parseFloat(custoData.icmsCredito)   || 0;
+    const pisCredito    = parseFloat(custoData.pisCredito)    || 0;
+    const cofinsCredito = parseFloat(custoData.cofinsCredito) || 0;
+    custoNf    = _r2(custoBase + ipiValor);
+    icmsCred   = _r2(icmsCredito);
+    pisCred    = _r2(pisCredito);
+    cofinsCred = _r2(cofinsCredito);
     impRecup   = _r2(icmsCred + pisCred + cofinsCred);
   }
 

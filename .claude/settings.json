@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git rm *)",
-      "Bash(git commit --amend -m ' *)"
+      "Bash(git commit --amend -m ' *)",
+      "WebFetch(domain:erp.tiny.com.br)",
+      "WebFetch(domain:api-docs.erp.olist.com)"
     ]
   }
 }

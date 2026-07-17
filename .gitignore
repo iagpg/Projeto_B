@@ -2,6 +2,7 @@
 tiny_token.json
 google_token.json
 config.json
+apps_script/credentials_local.gs
 
 # Python cache
 __pycache__/
@@ -16,3 +17,6 @@ env/
 # Outputs gerados
 output/
 *.xlsx
+
+# Cache local de NF (dados de negócio, não versionar)
+cache/

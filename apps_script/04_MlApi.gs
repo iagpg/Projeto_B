@@ -84,15 +84,16 @@ function _isoDateFim(d) {
 
 function getMlPedidos(dataInicio, dataFim) {
   const todos = [];
+  const userId = ML_USER_ID_PROP();
   let offset = 0;
   while (true) {
     const data = mlGet('/orders/search', {
-      seller:                         ML_USER_ID_PROP(),
-      'order.status':                 'paid',
-      'order.date_created.from':      _isoDate(dataInicio),
-      'order.date_created.to':        _isoDateFim(dataFim),
-      sort:                           'date_desc',
-      limit:                          50,
+      seller:                    userId,
+      'order.status':            'paid',
+      'order.date_created.from': _isoDate(dataInicio),
+      'order.date_created.to':   _isoDateFim(dataFim),
+      sort:                      'date_desc',
+      limit:                     50,
       offset,
     });
     if (!data || !data.results) break;

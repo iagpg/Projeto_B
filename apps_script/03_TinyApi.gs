@@ -68,23 +68,27 @@ function _extrairItensNota(nota) {
   return nota.itens || nota.items || nota.produtos || nota.products || [];
 }
 
-// Retorna lista de {id, numero, data} das NFs de entrada autorizadas
+// Retorna lista de {id, numero, data} das NFs de entrada
 function _listarNfIds(mesesAtras) {
   const hoje = new Date();
   const inicio = new Date(hoje);
   inicio.setMonth(inicio.getMonth() - mesesAtras);
-  const fmt = d => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+  const fmtDate = d => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
 
   const nfHeaders = [];
-  let pagina = 1;
+  let offset = 0;
   while (true) {
-    const data = tinyGet('/notas-fiscais', {
-      tipo:       'E',
-      situacao:   'A',
-      dataInicio: fmt(inicio),
-      dataFim:    fmt(hoje),
-      pagina:     pagina,
-      limite:     100,
+    const data = tinyGet('/notas', {
+      tipo:        'E',
+      dataInicial: fmtDate(inicio),
+      dataFinal:   fmtDate(hoje),
+      limit:       100,
+      offset:      offset,
     });
     const inner = (data.data) || data;
     const itens = inner.itens || inner.notas || inner.items || (Array.isArray(inner) ? inner : []);
@@ -95,9 +99,9 @@ function _listarNfIds(mesesAtras) {
       data:   String(n.dataEmissao || n.data || n.date || ''),
     })));
     const pag = inner.paginacao || inner.pagination || {};
-    const totalPag = parseInt(pag.totalPaginas || pag.totalPages || 1, 10);
-    if (pagina >= totalPag) break;
-    pagina++;
+    const total = parseInt(pag.total || 0, 10);
+    offset += 100;
+    if (offset >= total || itens.length < 100) break;
     Utilities.sleep(150);
   }
   return nfHeaders;
@@ -105,15 +109,16 @@ function _listarNfIds(mesesAtras) {
 
 // ── Build do Cache de Custos ───────────────────────────────────────────────────
 
-// Roda as NFs em paralelo (fetchAll em lotes de 30) e grava na aba "Cache NF"
+// Busca NF detalhes + impostos por item em lotes e grava na aba "Cache NF"
 function atualizarCacheNF() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.toast('Buscando notas fiscais de entrada...', 'BouwObra', -1);
 
   const nfHeaders = _listarNfIds(12);
-  ss.toast(`${nfHeaders.length} NFs encontradas. Buscando detalhes...`, 'BouwObra', -1);
+  ss.toast(`${nfHeaders.length} NFs encontradas. Buscando itens...`, 'BouwObra', -1);
 
-  const costMap = {}; // sku → {custoBase, ipiPct, icmsPct, nfNumero, nfData}
+  // Fase 1: buscar detalhes das NFs para extrair lista de itens
+  const pendingItems = []; // {nfId, nfNumero, nfData, idItem, sku, qty, unit, descricao}
   const BATCH = 30;
 
   for (let i = 0; i < nfHeaders.length; i += BATCH) {
@@ -125,32 +130,68 @@ function atualizarCacheNF() {
       const nfHdr = lote[j];
       const inner = resp.data || resp;
       const nota  = inner.nota || inner;
-      const itens = _extrairItensNota(nota);
+      const itens = nota.itens || nota.items || nota.produtos || [];
 
       itens.forEach(item => {
-        const sku = _extrairSkuItemNF(item);
-        if (!sku || costMap[sku]) return; // mantém a mais recente (NFs vêm desc.)
-
-        const qty   = _extrairQtdItemNF(item);
-        const valor = _extrairValorUnitarioItemNF(item);
-        if (valor <= 0 || qty <= 0) return;
-
-        costMap[sku] = {
-          custoBase: Math.round(valor * 10000) / 10000,
-          ipiPct:    _extrairIpiPct(item),
-          icmsPct:   _extrairIcmsPct(item),
-          nfNumero:  nfHdr.numero,
-          nfData:    nfHdr.data,
-        };
+        const sku = String(item.codigo || '').trim();
+        if (!sku) return;
+        const idItem   = parseInt(item.idItem || item.id || 0, 10);
+        const qty      = parseFloat(item.quantidade || 1) || 1;
+        const unit     = parseFloat(item.valorUnitario || 0);
+        const descricao = String(item.descricao || '').trim();
+        if (unit <= 0) return;
+        pendingItems.push({ nfId: nfHdr.id, nfNumero: nfHdr.numero, nfData: nfHdr.data,
+                            idItem, sku, qty, unit, descricao });
       });
     });
     Utilities.sleep(100);
   }
 
+  ss.toast(`${pendingItems.length} itens. Buscando impostos...`, 'BouwObra', -1);
+
+  // Fase 2: buscar impostos por item (GET /notas/{nfId}/itens/{idItem}) em lotes
+  const costMap = {}; // sku → custo com valores absolutos
+  const _impVal = obj => (obj && typeof obj === 'object') ? (parseFloat(obj.valorImposto || obj.valor || 0) || 0) : 0;
+  const _rnd4   = v => Math.round(v * 10000) / 10000;
+  const validPairs = pendingItems.filter(it => it.idItem > 0);
+
+  for (let i = 0; i < validPairs.length; i += BATCH) {
+    const lote = validPairs.slice(i, i + BATCH);
+    const respostas = tinyGetItensParalelo(lote.map(it => ({ nfId: it.nfId, idItem: it.idItem })));
+
+    respostas.forEach((resp, j) => {
+      const it = lote[j];
+      if (costMap[it.sku]) return; // mantém NF mais recente
+      const taxes = resp || {};
+      costMap[it.sku] = {
+        custoBase:     _rnd4(it.unit),
+        ipiValor:      _rnd4(_impVal(taxes.ipi)    / it.qty),
+        icmsCredito:   _rnd4(_impVal(taxes.icms)   / it.qty),
+        pisCredito:    _rnd4(_impVal(taxes.pis)     / it.qty),
+        cofinsCredito: _rnd4(_impVal(taxes.cofins)  / it.qty),
+        nfNumero:      it.nfNumero,
+        nfData:        it.nfData,
+        descricao:     it.descricao,
+      };
+    });
+    Utilities.sleep(100);
+  }
+
+  // Itens sem idItem: registra custo base sem impostos detalhados
+  pendingItems.filter(it => it.idItem === 0).forEach(it => {
+    if (costMap[it.sku]) return;
+    costMap[it.sku] = {
+      custoBase: _rnd4(it.unit), ipiValor: 0, icmsCredito: 0,
+      pisCredito: 0, cofinsCredito: 0,
+      nfNumero: it.nfNumero, nfData: it.nfData, descricao: it.descricao,
+    };
+  });
+
   // Gravar na aba Cache NF (oculta)
   const agora = new Date().toLocaleString('pt-BR');
   const rows = Object.entries(costMap).map(([sku, d]) => [
-    sku, d.custoBase, d.ipiPct, d.icmsPct, d.nfNumero, d.nfData, agora
+    sku, d.custoBase, d.ipiValor, d.icmsCredito, d.pisCredito, d.cofinsCredito,
+    d.nfNumero, d.nfData, agora,
   ]);
 
   let ws = ss.getSheetByName(ABA_CACHE_NF);
@@ -178,11 +219,13 @@ function lerCacheNF() {
     const sku = String(row[0]).trim();
     if (!sku) return;
     map[sku] = {
-      custoBase: parseFloat(row[1]) || 0,
-      ipiPct:    parseFloat(row[2]) || 0,
-      icmsPct:   parseFloat(row[3]) || 0,
-      nfNumero:  String(row[4]),
-      nfData:    String(row[5]),
+      custoBase:     parseFloat(row[1]) || 0,
+      ipiValor:      parseFloat(row[2]) || 0,
+      icmsCredito:   parseFloat(row[3]) || 0,
+      pisCredito:    parseFloat(row[4]) || 0,
+      cofinsCredito: parseFloat(row[5]) || 0,
+      nfNumero:      String(row[6]),
+      nfData:        String(row[7]),
     };
   });
   return map;

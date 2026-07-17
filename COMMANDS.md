@@ -277,6 +277,30 @@ python scripts/populate_gestao.py --skip-orders
 
 ---
 
+### `sincronizar_custo.py`
+Constrói e mantém o cache local `cache/nf_custo.json` com o custo real de cada SKU
+extraído das Notas Fiscais de entrada do Tiny. Detecta mudanças de custo e salva
+alertas em `cache/alertas.json`.
+
+```bash
+# Incremental: só NFs com id maior que o último processado
+python scripts/sincronizar_custo.py
+
+# Varredura completa dos últimos 12 meses
+python scripts/sincronizar_custo.py --full
+
+# Compara cache atual vs API (sem gravar nada)
+python scripts/sincronizar_custo.py --report
+
+# Exibe metadados do cache atual
+python scripts/sincronizar_custo.py --info
+```
+
+**Saída:** `cache/nf_custo.json` (SKU → custo base, IPI, ICMS/PIS/COFINS crédito, NF)
+**Alertas:** `cache/alertas.json` (gerado quando custo varia > 2% entre sync)
+
+---
+
 ### `probe_tiny_nf.py`
 Diagnóstico da API Tiny v3 para Notas Fiscais.
 Exibe a estrutura bruta da resposta para verificar nomes de campos.

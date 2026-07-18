@@ -146,8 +146,15 @@ function testarVendasML() {
 
 // Roda no editor de script para testar autenticação Tiny
 function testarConexaoTiny() {
-  const data = tinyGet('/info-conta');
+  const data = tinyGet('/produtos', { limit: 1 });
   Logger.log(JSON.stringify(data));
+  const inner = data.data || data;
+  const itens = inner.itens || inner.items || inner.produtos || [];
+  if (data.error || data.status === 401) {
+    SpreadsheetApp.getActiveSpreadsheet()
+      .toast('❌ Tiny ERRO: ' + (data.message || data.error || JSON.stringify(data).substring(0, 100)), 'BouwObra', 10);
+    return;
+  }
   SpreadsheetApp.getActiveSpreadsheet()
-    .toast('Tiny OK: ' + JSON.stringify(data).substring(0, 80), 'BouwObra', 6);
+    .toast('✅ Tiny OK — ' + itens.length + ' produto(s) retornado(s)', 'BouwObra', 6);
 }

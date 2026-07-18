@@ -69,7 +69,7 @@ def main():
         "client_id":     CLIENT_ID,
         "redirect_uri":  _REDIRECT,
         "response_type": "code",
-        "scope":         "openid",
+        "scope":         "openid offline_access",
     })
 
     print("\n" + "=" * 60)

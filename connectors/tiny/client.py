@@ -47,7 +47,11 @@ def _refresh() -> str:
     }, timeout=15)
     d = r.json()
     if "access_token" not in d:
-        raise RuntimeError(f"Tiny token refresh failed: {d}. Run connectors/tiny/auth.py.")
+        raise RuntimeError(
+            f"Tiny token refresh failed: {d}\n"
+            "Run: python connectors/tiny/auth.py"
+        )
+    d["_expires_at"] = time.time() + d.get("expires_in", 3600)
     _save_token(d)
     return d["access_token"]
 

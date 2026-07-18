@@ -93,6 +93,21 @@ python scripts/check_promotions.py --c    # Curva C → aba "Analise Promocoes C
 
 ## Autenticação
 
+### `sincronizar_tokens_appscript.py`
+Sincroniza os tokens mais recentes do Python para o Apps Script.
+Lê `config.json` (tokens ML) e `tiny_token.json` (tokens Tiny), regrava
+`apps_script/credentials_local.gs` e executa `clasp push` automaticamente.
+
+**Rodar sempre depois de qualquer auth Python** (Tiny ou ML):
+
+```bash
+python scripts/sincronizar_tokens_appscript.py
+```
+
+Depois abrir a planilha e executar: **Menu BouwObra → Inicializar Configurações**
+
+---
+
 ### `connectors/tiny/auth.py`
 Setup do OAuth2 do Tiny ERP v3. Roda **uma vez** para obter o token inicial,
 e novamente quando o token expirar (mensagem de erro `Token is not active`).

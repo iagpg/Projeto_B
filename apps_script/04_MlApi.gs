@@ -63,27 +63,143 @@ function buildSkuMlbMap() {
 }
 
 // ── Taxas ML ──────────────────────────────────────────────────────────────────
+//
+// GET /users/{id}/items/{id}/fees está quebrado (retorna {}) — a taxa real vem
+// de GET /sites/MLB/listing_prices?price=...&category_id=..., filtrando pelo
+// listing_type_id do próprio anúncio (Clássico=12%, Premium=17% etc.).
 
 // Cache de taxas em memória (por execução)
 const _feesCache_ = {};
 
 function getMlItemFees(mlbId, price) {
-  if (_feesCache_[mlbId]) return _feesCache_[mlbId];
+  const cacheKey = mlbId + ':' + price;
+  if (_feesCache_[cacheKey]) return _feesCache_[cacheKey];
+
   try {
-    const data = mlGet(`/users/${ML_USER_ID_PROP()}/items/${mlbId}/fees`, { price });
-    if (data && (data.sale_fee_amount !== undefined)) {
-      const saleRs = parseFloat(data.sale_fee_amount) || 0;
-      const freteRs = parseFloat(data.shipping_fee_amount || data.shipping_fee || 0);
-      const pct = price > 0 ? Math.round(saleRs / price * 10000) / 100 : 12;
-      const result = { taxaRs: Math.round(saleRs * 100) / 100, taxaPct: pct, freteRs: Math.round(freteRs * 100) / 100 };
-      _feesCache_[mlbId] = result;
-      return result;
+    const item = mlGet(`/items/${mlbId}`, { attributes: 'category_id,listing_type_id' });
+    const categoryId    = item && item.category_id;
+    const listingTypeId = item && item.listing_type_id;
+    if (!categoryId || !listingTypeId) throw new Error('category_id/listing_type_id ausente');
+
+    const options = mlGet('/sites/MLB/listing_prices', { price, category_id: categoryId });
+    if (!Array.isArray(options)) throw new Error('resposta inválida de listing_prices');
+
+    const match = options.find(o => o.listing_type_id === listingTypeId);
+    if (!match) throw new Error(`listing_type_id '${listingTypeId}' não encontrado`);
+
+    const saleRs  = parseFloat(match.sale_fee_amount) || 0;
+    const freteRs = parseFloat(match.shipping_fee_amount) || 0;
+    const pct = price > 0 ? Math.round(saleRs / price * 10000) / 100 : ML_TAXA_DEFAULT;
+    const result = {
+      taxaRs: Math.round(saleRs * 100) / 100,
+      taxaPct: pct,
+      freteRs: Math.round(freteRs * 100) / 100,
+      incerto: false,
+    };
+    _feesCache_[cacheKey] = result;
+    return result;
+  } catch (e) {
+    // Fallback: taxa default — valor NÃO confirmado pela API
+    const fallback = {
+      taxaRs: Math.round(price * ML_TAXA_DEFAULT / 100 * 100) / 100,
+      taxaPct: ML_TAXA_DEFAULT,
+      freteRs: 0,
+      incerto: true,
+    };
+    _feesCache_[cacheKey] = fallback;
+    return fallback;
+  }
+}
+
+// ── Preço praticado (promoções) ───────────────────────────────────────────────
+//
+// Um anúncio pode ter várias promoções cadastradas (campanhas, SMART, DEAL,
+// cupons) simultaneamente, mas só uma vale de fato no momento — a Meli aplica
+// ao comprador a MENOR entre as "type": "promotion" cuja janela start_time/
+// end_time (canal channel_marketplace) contém o instante atual.
+
+function getPrecoPraticado(mlbId, precoBase) {
+  try {
+    const data   = mlGet(`/items/${mlbId}/prices`);
+    const prices = (data && data.prices) || [];
+    const agora  = new Date();
+
+    const validas = prices
+      .filter(p => p.type === 'promotion')
+      .filter(p => {
+        const cond = p.conditions || {};
+        if (!(cond.context_restrictions || []).includes('channel_marketplace')) return false;
+        if (cond.start_time && agora < new Date(cond.start_time)) return false;
+        if (cond.end_time && agora > new Date(cond.end_time)) return false;
+        return p.amount !== undefined && p.amount !== null;
+      })
+      .map(p => parseFloat(p.amount));
+
+    if (validas.length) {
+      return { precoPraticado: Math.min(...validas), promoAtiva: true, incerto: false };
     }
-  } catch (e) { /* fallback */ }
-  // Fallback: 12% (taxa padrão gold_special)
-  const fallback = { taxaRs: Math.round(price * 0.12 * 100) / 100, taxaPct: 12, freteRs: 0 };
-  _feesCache_[mlbId] = fallback;
-  return fallback;
+    return { precoPraticado: precoBase, promoAtiva: false, incerto: false };
+  } catch (e) {
+    return { precoPraticado: precoBase, promoAtiva: false, incerto: true };
+  }
+}
+
+// ── RT (Redução de Tarifa) ────────────────────────────────────────────────────
+//
+// Parte do desconto de uma promoção SMART que a própria Meli banca reduzindo
+// a comissão de venda, em vez do vendedor. Fonte: campo "meli_percentage" da
+// promoção ativa (mesma cujo "price" bate com o preço praticado), em
+// GET /seller-promotions/items/{id}. A API só expõe esse percentual arredondado
+// a 1 casa decimal, então o valor calculado pode diferir alguns centavos do
+// exibido no painel do ML (por isso "incerto": true sempre que há bônus).
+
+function getItemPromotions(mlbId) {
+  try {
+    const data = mlGet(`/seller-promotions/items/${mlbId}`, { app_version: 'v2' });
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function getTaxaBonus(mlbId, precoBase, precoPraticado) {
+  try {
+    const promos = getItemPromotions(mlbId);
+    for (const promo of promos) {
+      if (promo.status !== 'started') continue;
+      const precoPromo = promo.price;
+      if (precoPromo === undefined || precoPromo === null) continue;
+      if (Math.round(precoPromo * 100) !== Math.round(precoPraticado * 100)) continue;
+
+      if (promo.meli_percentage) {
+        const rtValor = Math.round(precoBase * promo.meli_percentage / 100 * 100) / 100;
+        return { rtValor, incerto: true };
+      }
+      return { rtValor: 0, incerto: false };
+    }
+    return { rtValor: 0, incerto: false };
+  } catch (e) {
+    return { rtValor: 0, incerto: true };
+  }
+}
+
+// ── Frete (Mercado Envios / Full) ─────────────────────────────────────────────
+//
+// Custo de frete que o vendedor paga por essa venda — em anúncios Full/
+// Fulfillment, esse custo é cobrado do vendedor mesmo com frete "grátis" para
+// o comprador, reduzindo a margem real.
+// Fonte: GET /users/{seller}/shipping_options/free?item_id={id}
+//        → coverage.all_country.list_cost
+
+function getFreteEnvio(mlbId) {
+  try {
+    const data = mlGet(`/users/${ML_USER_ID_PROP()}/shipping_options/free`, { item_id: mlbId });
+    const cost = data && data.coverage && data.coverage.all_country && data.coverage.all_country.list_cost;
+    if (cost === undefined || cost === null) throw new Error('list_cost ausente');
+    return { freteRs: Math.round(parseFloat(cost) * 100) / 100, incerto: false };
+  } catch (e) {
+    return { freteRs: 0, incerto: true };
+  }
 }
 
 // ── Pedidos ───────────────────────────────────────────────────────────────────

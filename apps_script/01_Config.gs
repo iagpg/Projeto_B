@@ -21,6 +21,9 @@ const COFINS_VENDA = 0.076;
 const PIS_COMPRA   = 0.0165;
 const COFINS_COMPRA = 0.076;
 
+// Taxa ML default (fallback quando a API de taxas está indisponível)
+const ML_TAXA_DEFAULT = 12.0;
+
 // Nomes das abas
 const ABA_PRECIFICACAO = 'Precificação';
 const ABA_DASHBOARD    = 'Dashboard';
@@ -28,30 +31,39 @@ const ABA_CACHE_NF     = 'Cache NF';       // aba oculta
 
 // Cabeçalhos da aba Precificação
 const HEADERS_PREC = [
-  'ID ML',                     // A  0
-  'SKU',                       // B  1
-  'Nome',                      // C  2
-  'Categoria',                 // D  3
-  'Preço de Venda (R$)',       // E  4
-  'Taxa ML (%)',               // F  5
-  'RT (%)',                    // G  6
-  'Frete (R$)',                // H  7
-  'ICMS Venda (R$)',           // I  8
-  'PIS Venda (R$)',            // J  9
-  'COFINS Venda (R$)',         // K  10
-  'Comissão + Frete ML (R$)', // L  11
-  'Custo NF c/ IPI (R$)',     // M  12
-  'ICMS Compra — crédito (R$)',   // N  13
-  'PIS Compra — crédito (R$)',    // O  14
-  'COFINS Compra — crédito (R$)', // P  15
-  'Imposto Recuperável (R$)', // Q  16
-  'Margem Líquida (R$)',      // R  17
-  'Margem Líquida (%)',       // S  18  ← usada para coloração
-  'Status Anúncio',           // T  19
-  'Última Atualização',       // U  20
+  'ID ML',                         // A  0
+  'SKU',                           // B  1
+  'Nome',                          // C  2
+  'Categoria',                     // D  3
+  'Preço Base (R$)',               // E  4  — preço "cheio" do anúncio, sem promoção
+  'Preço Praticado (R$)',          // F  5  — preço vigente agora (com promoção, se houver); usado no cálculo
+  'Taxa ML (%)',                   // G  6
+  'RT (R$)',                       // H  7  — Redução de Tarifa: comissão bancada pela Meli em promoções SMART
+  'Frete (R$)',                    // I  8
+  'ICMS Venda (R$)',               // J  9
+  'PIS Venda (R$)',                // K  10
+  'COFINS Venda (R$)',             // L  11
+  'Comissão + Frete ML (R$)',      // M  12
+  'Custo NF c/ IPI (R$)',          // N  13
+  'ICMS Compra — crédito (R$)',    // O  14
+  'PIS Compra — crédito (R$)',     // P  15
+  'COFINS Compra — crédito (R$)',  // Q  16
+  'Imposto Recuperável (R$)',      // R  17
+  'Margem Líquida (R$)',           // S  18
+  'Margem Líquida (%)',            // T  19  ← usada para coloração
+  'Status Anúncio',                // U  20
+  'Última Atualização',            // V  21
 ];
 
-const MARGEM_COL_IDX = 18; // índice 0-based da coluna Margem %
+const MARGEM_COL_IDX = 19; // índice 0-based da coluna Margem %
+
+// Coloração fixa (independente da margem):
+//   crédito — valores que beneficiam a margem (créditos fiscais + bônus RT) → verde claro
+//   débito  — valores que reduzem a margem (encargos de venda e custo)     → vermelho claro
+//   margem  — R$ e % da margem líquida, coloridos pela faixa de desempenho
+const CREDITO_COLS = [7, 14, 15, 16, 17];  // RT + ICMS/PIS/COFINS crédito + Imposto Recuperável
+const DEBITO_COLS  = [8, 9, 10, 11, 12, 13]; // Frete, ICMS/PIS/COFINS venda, Comissão+Frete, Custo NF
+const MARGEM_COLS  = [18, MARGEM_COL_IDX];   // Margem Líquida (R$) e (%)
 
 // Abas auxiliares
 const ABA_ALERTAS = 'Alertas';

@@ -13,6 +13,7 @@ Uso direto (baixo nível):
 import json
 import time
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 import requests
 
@@ -137,6 +138,54 @@ def search_by_group(item_group_id: str) -> list:
         return []
     data = ml_get(f"{_BASE}/users/{ML_USER_ID}/items/search", {"item_group_id": item_group_id})
     return data.get("results", []) if isinstance(data, dict) else []
+
+
+def get_current_price(mlb_id: str, preco_base: float) -> dict:
+    """
+    Retorna o preço praticado (efetivo) do anúncio agora, considerando promoções.
+
+    Um anúncio pode ter várias promoções cadastradas (campanhas do vendedor,
+    SMART, DEAL, cupons), mas só uma vale de fato no momento — a Meli aplica
+    ao comprador a MENOR entre as promoções "type": "promotion" cuja janela
+    start_time/end_time (canal channel_marketplace) contém o instante atual.
+    Se nenhuma estiver vigente, o preço praticado é o próprio preço base.
+
+    Fonte: GET /items/{id}/prices
+    """
+    try:
+        data   = ml_get(f"{_BASE}/items/{mlb_id}/prices")
+        prices = data.get("prices", []) if isinstance(data, dict) else []
+        agora  = datetime.now(timezone.utc)
+
+        validas = []
+        for p in prices:
+            if p.get("type") != "promotion":
+                continue
+            cond = p.get("conditions") or {}
+            if "channel_marketplace" not in (cond.get("context_restrictions") or []):
+                continue
+            inicio = cond.get("start_time")
+            fim    = cond.get("end_time")
+            if inicio and agora < datetime.fromisoformat(inicio.replace("Z", "+00:00")):
+                continue
+            if fim and agora > datetime.fromisoformat(fim.replace("Z", "+00:00")):
+                continue
+            amount = p.get("amount")
+            if amount is not None:
+                validas.append(float(amount))
+
+        if validas:
+            return {"preco_praticado": min(validas), "promo_ativa": True, "incerto": False}
+        return {"preco_praticado": preco_base, "promo_ativa": False, "incerto": False}
+    except Exception:
+        return {"preco_praticado": preco_base, "promo_ativa": False, "incerto": True}
+
+
+def get_item_promotions(mlb_id: str) -> list:
+    """Lista as promoções cadastradas para o anúncio: campanhas do vendedor,
+    SMART, DEAL, cupons — cada uma com seu próprio status/price/janela."""
+    data = ml_get(f"{_BASE}/seller-promotions/items/{mlb_id}", {"app_version": "v2"})
+    return data if isinstance(data, list) else []
 
 
 def get_migration(item_id: str) -> list:

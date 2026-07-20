@@ -6,8 +6,11 @@ Testa e calcula a precificacao completa de um produto.
 Passos verificados:
   1. NF cost cache (cache/nf_custo.json) tem o SKU
   2. Anuncio ML existe e tem seller_sku correto
-  3. Taxas ML (comissao + frete) via API
-  4. Calculo Lucro Real completo (mesma formula do Apps Script)
+  3. Preco praticado agora (menor promocao ativa, ou preco base se nenhuma)
+  4. Taxa de comissao ML via API, sobre o preco praticado
+  5. Frete (Mercado Envios / Full) pago pelo vendedor
+  6. RT (reducao de tarifa) — bonus Meli em promocoes SMART
+  7. Calculo Lucro Real completo (mesma formula do Apps Script)
 
 Uso:
     python scripts/probe_precificacao.py MLB3633227036 AM27
@@ -21,7 +24,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from connectors.mercadolivre.client import ml_get, ML_USER_ID, _BASE, _ATTRS, extract_seller_sku
+from connectors.mercadolivre.client import ml_get, ML_USER_ID, _BASE, _ATTRS, extract_seller_sku, get_current_price
+from connectors.mercadolivre.orders import get_item_fees, get_taxa_bonus, get_frete_envio
 from services.custo_service import load_cache
 
 # ── Constantes Lucro Real (espelham 01_Config.gs) ─────────────────────────────
@@ -110,43 +114,67 @@ def checar_anuncio_ml(mlb_id: str, sku_esperado: str | None = None):
             "categoryId": category, "title": title, "seller_sku": seller_sku}
 
 
-# ── 3. Taxas ML ───────────────────────────────────────────────────────────────
+# ── 3. Preco praticado (promocao) + Taxas ML ──────────────────────────────────
+
+def checar_preco_praticado(mlb_id: str, preco_base: float):
+    print(f"\n[3] Preco praticado (promocoes) - {mlb_id}")
+    promo = get_current_price(mlb_id, preco_base)
+    if promo["incerto"]:
+        print("    AVISO: falha ao consultar /items/{id}/prices, usando preco base.")
+    elif promo["promo_ativa"]:
+        print(f"    Promocao ATIVA agora: {_brl(promo['preco_praticado'])} "
+              f"(base {_brl(preco_base).strip()})")
+    else:
+        print(f"    Sem promocao ativa. Preco praticado = preco base ({_brl(preco_base).strip()}).")
+    return promo
+
 
 def checar_taxas_ml(mlb_id: str, price: float):
-    print(f"\n[3] Taxas ML - {mlb_id}  (preco={_brl(price).strip()})")
-    data = ml_get(
-        f"{_BASE}/users/{ML_USER_ID}/items/{mlb_id}/fees",
-        {"price": price},
-    )
-    if not data or "sale_fee_amount" not in data:
-        print(f"    Resposta: {str(data)[:200]}")
-        print("    Usando fallback: comissao 12%, frete R$ 0,00")
-        taxa_rs  = _r2(price * 0.12)
-        taxa_pct = 12.0
-        frete_rs = 0.0
+    print(f"\n[4] Taxas ML - {mlb_id}  (preco praticado={_brl(price).strip()})")
+    fees = get_item_fees(mlb_id, price)
+    if fees["incerto"]:
+        print("    AVISO: API de taxas indisponivel, usando fallback de config.json.")
+    print(f"    Comissao    : {_brl(fees['taxa_R$'])}  ({_pct(fees['taxa_pct']).strip()})")
+    return {"taxaRs": fees["taxa_R$"], "taxaPct": fees["taxa_pct"]}
+
+
+def checar_frete(mlb_id: str):
+    print(f"\n[5] Frete (Mercado Envios / Full) - {mlb_id}")
+    frete = get_frete_envio(mlb_id)
+    if frete["incerto"]:
+        print("    AVISO: nao foi possivel consultar shipping_options/free, frete = 0.")
     else:
-        taxa_rs  = float(data.get("sale_fee_amount") or 0)
-        frete_rs = float(data.get("shipping_fee_amount") or data.get("shipping_fee") or 0)
-        taxa_pct = _r2(taxa_rs / price * 100) if price else 12.0
-
-    print(f"    Comissao    : {_brl(taxa_rs)}  ({_pct(taxa_pct).strip()})")
-    print(f"    Frete       : {_brl(frete_rs)}")
-    return {"taxaRs": taxa_rs, "taxaPct": taxa_pct, "freteRs": frete_rs}
+        print(f"    Custo de frete pago pelo vendedor: {_brl(frete['frete_R$'])}")
+    return frete
 
 
-# ── 4. Calculo Lucro Real ─────────────────────────────────────────────────────
+def checar_rt(mlb_id: str, preco_base: float, preco_praticado: float):
+    print(f"\n[6] RT (reducao de tarifa) - {mlb_id}")
+    bonus = get_taxa_bonus(mlb_id, preco_base, preco_praticado)
+    if bonus["rt_valor"]:
+        print(f"    Bonus Meli encontrado: {_brl(bonus['rt_valor'])} "
+              "(estimado a partir do % arredondado da promocao, pode variar centavos)")
+    else:
+        print("    Sem bonus RT (promocao atual nao e do tipo SMART, ou nenhuma promocao ativa).")
+    return bonus
 
-def calcular_margem(ml_data: dict, fees: dict, custo):
-    preco      = ml_data["price"]
+
+# ── 5. Calculo Lucro Real ─────────────────────────────────────────────────────
+
+def calcular_margem(ml_data: dict, fees: dict, custo, preco_praticado: float,
+                     rt_valor: float = 0.0, frete_rs: float = 0.0):
+    preco_base = ml_data["price"]
+    preco      = preco_praticado
     taxa_rs    = fees["taxaRs"]
-    frete_rs   = fees["freteRs"]
     taxa_pct   = fees["taxaPct"]
 
-    comissao_frete = _r2(taxa_rs + frete_rs)
+    comissao_frete = _r2(taxa_rs - rt_valor + frete_rs)
 
     icms_venda   = _r2(preco * ICMS_VENDA)
-    pis_venda    = _r2(preco * PIS_VENDA)
-    cofins_venda = _r2(preco * COFINS_VENDA)
+    # No Lucro Real, PIS/COFINS de venda incidem sobre a receita já líquida de ICMS
+    base_pis_cofins = preco - icms_venda
+    pis_venda    = _r2(base_pis_cofins * PIS_VENDA)
+    cofins_venda = _r2(base_pis_cofins * COFINS_VENDA)
 
     if custo:
         custo_nf    = _r2(custo.custo_base + custo.ipi_valor)
@@ -160,10 +188,12 @@ def calcular_margem(ml_data: dict, fees: dict, custo):
     margem_rs  = _r2(preco - comissao_frete - icms_venda - pis_venda - cofins_venda - custo_nf + imp_recup)
     margem_pct = _r2(margem_rs / preco * 100) if preco else 0.0
 
-    print(f"\n[4] Calculo Lucro Real")
+    print(f"\n[7] Calculo Lucro Real (sobre o preco praticado)")
     print(SEP)
-    print(f"  Preco de venda          : {_brl(preco)}")
+    print(f"  Preco base              : {_brl(preco_base)}")
+    print(f"  Preco praticado (venda) : {_brl(preco)}")
     print(f"  (-) Comissao ML         : {_brl(taxa_rs)}  ({_pct(taxa_pct).strip()})")
+    print(f"  (+) RT (bonus Meli)     : {_brl(rt_valor)}")
     print(f"  (-) Frete ML            : {_brl(frete_rs)}")
     print(f"  (-) ICMS venda          : {_brl(icms_venda)}  (12%)")
     print(f"  (-) PIS venda           : {_brl(pis_venda)}  (1,65%)")
@@ -228,8 +258,12 @@ def main():
     ml_data = checar_anuncio_ml(mlb_id, sku) if mlb_id else None
 
     if ml_data and ml_data["price"] > 0:
-        fees = checar_taxas_ml(mlb_id, ml_data["price"])
-        margem = calcular_margem(ml_data, fees, custo)
+        promo = checar_preco_praticado(mlb_id, ml_data["price"])
+        fees  = checar_taxas_ml(mlb_id, promo["preco_praticado"])
+        frete = checar_frete(mlb_id)
+        bonus = checar_rt(mlb_id, ml_data["price"], promo["preco_praticado"])
+        margem = calcular_margem(ml_data, fees, custo, promo["preco_praticado"],
+                                  bonus["rt_valor"], frete["frete_R$"])
 
         print()
         if custo and ml_data:

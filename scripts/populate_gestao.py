@@ -44,11 +44,17 @@ from connectors.mercadolivre.orders  import (
     get_pedidos_hoje,
     get_anuncios_status,
     get_item_fees,
+    get_taxa_bonus,
+    get_frete_envio,
 )
+from connectors.mercadolivre.client  import get_current_price
 from services.precificacao_service import (
     calcular_linha,
     HEADERS_PRECIFICACAO,
     MARGEM_PCT_COL_INDEX,
+    CREDITO_COLS,
+    DEBITO_COLS,
+    MARGEM_COLS,
 )
 
 
@@ -144,10 +150,14 @@ def main():
 
     # ── 4. Calcular linhas de precificação ───────────────────────────────────
     print("\n[Precificação] Calculando margens...")
-    rows = []
+    rows        = []
+    uncertain   = []
     sem_custo   = 0
     sem_anuncio = 0
     fees_cache  = {}
+    promo_cache = {}
+    bonus_cache = {}
+    frete_cache = {}
 
     for produto in tiny_products:
         sku = _extract_sku(produto)
@@ -161,21 +171,43 @@ def main():
             mlb_id = ml_entry.get("mlb_id", "")
             price  = ml_entry.get("price", 0.0)
 
-            # Taxa ML (cache por mlb_id para não chamar a API repetidamente)
+            # Taxa ML e preço praticado (cache por mlb_id para não repetir chamadas)
             if mlb_id not in fees_cache:
                 fees_cache[mlb_id] = get_item_fees(mlb_id, price)
                 time.sleep(0.05)
+            if mlb_id not in promo_cache:
+                promo_cache[mlb_id] = get_current_price(mlb_id, price)
+                time.sleep(0.05)
 
-            fees = fees_cache[mlb_id]
+            fees  = fees_cache[mlb_id]
+            promo = promo_cache[mlb_id]
+
+            if mlb_id not in bonus_cache:
+                bonus_cache[mlb_id] = get_taxa_bonus(mlb_id, price, promo.get("preco_praticado", price))
+                time.sleep(0.05)
+            bonus = bonus_cache[mlb_id]
+
+            if mlb_id not in frete_cache:
+                frete_cache[mlb_id] = get_frete_envio(mlb_id)
+                time.sleep(0.05)
+            frete = frete_cache[mlb_id]
+
             ml_data = {
                 "mlb_id":     mlb_id,
                 "title":      ml_entry.get("title", ""),
                 "price":      price,
+                "preco_praticado": promo.get("preco_praticado", price),
+                "promo_ativa":     promo.get("promo_ativa", False),
+                "promo_incerto":   promo.get("incerto", False),
                 "status":     ml_entry.get("status", ""),
                 "category_id": ml_entry.get("category_id", ""),
                 "taxa_pct":   fees.get("taxa_pct", ML_TAXA_DEFAULT),
                 "taxa_R$":    fees.get("taxa_R$", 0.0),
-                "frete_R$":   fees.get("frete_R$", 0.0),
+                "frete_R$":   frete.get("frete_R$", 0.0),
+                "frete_incerto": frete.get("incerto", False),
+                "fees_incerto": fees.get("incerto", False),
+                "rt_valor":   bonus.get("rt_valor", 0.0),
+                "rt_incerto": bonus.get("incerto", False),
             }
         else:
             sem_anuncio += 1
@@ -186,15 +218,15 @@ def main():
             sem_custo += 1
 
         # Calcular linha
-        row = calcular_linha(
+        row, uncertain_cols = calcular_linha(
             sku=sku,
             ml_data=ml_data,
             custo_data=custo_data,
             icms_venda_pct=ICMS_VENDA_PCT,
-            rt_pct=0.0,
             timestamp=timestamp,
         )
         rows.append(row)
+        uncertain.append(uncertain_cols)
 
     print(f"  Linhas calculadas: {len(rows)}")
     print(f"  Sem anúncio ML:    {sem_anuncio}")
@@ -241,6 +273,10 @@ def main():
             headers=HEADERS_PRECIFICACAO,
             rows=rows,
             margin_col_index=MARGEM_PCT_COL_INDEX,
+            uncertain_cols_per_row=uncertain,
+            credito_cols=CREDITO_COLS,
+            debito_cols=DEBITO_COLS,
+            margem_cols=MARGEM_COLS,
         )
         print(f"  ✓ Aba Precificação atualizada ({len(rows)} produtos)")
     except Exception as e:

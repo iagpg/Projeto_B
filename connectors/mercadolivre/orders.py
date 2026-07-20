@@ -188,34 +188,98 @@ def get_anuncios_status() -> dict:
 
 def get_item_fees(mlb_id: str, price: float) -> dict:
     """
-    Retorna a taxa do ML para um anúncio em R$.
-    Tenta GET /users/{uid}/items/{id}/fees — fallback: taxa default de config.json.
+    Retorna a taxa real do ML para um anúncio em R$, via
+    GET /sites/MLB/listing_prices?price=...&category_id=...,
+    filtrando pelo listing_type_id do próprio anúncio.
+    Fallback: taxa default de config.json (marca "incerto": True).
     """
     try:
-        data = _get(
-            f"{_BASE}/users/{ML_USER_ID}/items/{mlb_id}/fees",
-            {"price": price},
-        )
-        if not isinstance(data, dict):
-            raise ValueError("resposta inválida")
+        item = _get(f"{_BASE}/items/{mlb_id}", {"attributes": "category_id,listing_type_id"})
+        category_id     = item.get("category_id") if isinstance(item, dict) else None
+        listing_type_id  = item.get("listing_type_id") if isinstance(item, dict) else None
+        if not category_id or not listing_type_id:
+            raise ValueError("category_id/listing_type_id ausente no anúncio")
 
-        # A API retorna uma estrutura com sale_fee_amount e/ou shipping_fee
-        sale_fee   = float(data.get("sale_fee_amount", 0) or 0)
-        frete      = float(data.get("shipping_fee_amount", 0) or 0)
-        taxa_pct   = round(sale_fee / price * 100, 2) if price else ML_TAXA_DEFAULT
+        options = _get(f"{_BASE}/sites/MLB/listing_prices", {
+            "price":       price,
+            "category_id": category_id,
+        })
+        if not isinstance(options, list):
+            raise ValueError("resposta inválida de listing_prices")
+
+        match = next((o for o in options if o.get("listing_type_id") == listing_type_id), None)
+        if not match:
+            raise ValueError(f"listing_type_id '{listing_type_id}' não encontrado nas opções")
+
+        sale_fee = float(match.get("sale_fee_amount", 0) or 0)
+        frete    = float(match.get("shipping_fee_amount", 0) or 0)
+        taxa_pct = round(sale_fee / price * 100, 2) if price else ML_TAXA_DEFAULT
         return {
             "taxa_R$":   round(sale_fee, 2),
             "taxa_pct":  taxa_pct,
             "frete_R$":  round(frete, 2),
+            "incerto":   False,
         }
     except Exception:
-        # Fallback: usa taxa default configurada
+        # Fallback: usa taxa default configurada — valor NAO confirmado pela API
         taxa_R = round(price * ML_TAXA_DEFAULT / 100, 2)
         return {
             "taxa_R$":   taxa_R,
             "taxa_pct":  ML_TAXA_DEFAULT,
             "frete_R$":  0.0,
+            "incerto":   True,
         }
+
+
+def get_frete_envio(mlb_id: str) -> dict:
+    """
+    Custo de frete (Mercado Envios) que o vendedor paga por essa venda — no caso
+    de anúncios Full/Fulfillment, esse custo é cobrado do vendedor mesmo com
+    frete "grátis" para o comprador, reduzindo a margem real.
+
+    Fonte: GET /users/{seller_id}/shipping_options/free?item_id={id}
+           → coverage.all_country.list_cost
+    """
+    try:
+        data  = _get(f"{_BASE}/users/{ML_USER_ID}/shipping_options/free", {"item_id": mlb_id})
+        cost  = ((data or {}).get("coverage") or {}).get("all_country", {}).get("list_cost")
+        if cost is None:
+            raise ValueError("list_cost ausente na resposta")
+        return {"frete_R$": round(float(cost), 2), "incerto": False}
+    except Exception:
+        return {"frete_R$": 0.0, "incerto": True}
+
+
+def get_taxa_bonus(mlb_id: str, preco_base: float, preco_praticado: float) -> dict:
+    """
+    Calcula a RT (Redução de Tarifa): parte do desconto de uma promoção SMART
+    que a própria Meli banca reduzindo a comissão de venda, em vez do vendedor.
+
+    Fonte: campo "meli_percentage" da promoção ativa (mesma cujo "price" bate
+    com o preço praticado), em GET /seller-promotions/items/{id}.
+
+    RT (R$) = meli_percentage% × preço base.
+    A API só expõe esse percentual arredondado a 1 casa decimal, então o valor
+    calculado aqui pode diferir alguns centavos do exibido no painel do ML
+    (marca "incerto": True sempre que há bônus, por essa imprecisão).
+    """
+    from connectors.mercadolivre.client import get_item_promotions
+    try:
+        for promo in get_item_promotions(mlb_id):
+            if promo.get("status") != "started":
+                continue
+            preco_promo = promo.get("price")
+            if preco_promo is None or round(float(preco_promo), 2) != round(float(preco_praticado), 2):
+                continue
+
+            meli_pct = promo.get("meli_percentage")
+            if meli_pct:
+                return {"rt_valor": round(preco_base * float(meli_pct) / 100, 2), "incerto": True}
+            return {"rt_valor": 0.0, "incerto": False}
+
+        return {"rt_valor": 0.0, "incerto": False}
+    except Exception:
+        return {"rt_valor": 0.0, "incerto": True}
 
 
 # ── Mapa SKU → MLB (para todos os produtos do vendedor) ───────────────────────

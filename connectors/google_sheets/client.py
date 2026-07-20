@@ -90,6 +90,9 @@ _MARGIN_YELLOW = {"red": 1.0,   "green": 0.949, "blue": 0.8}
 _MARGIN_RED    = {"red": 0.957, "green": 0.851, "blue": 0.851}
 _HEADER_BG     = {"red": 0.133, "green": 0.133, "blue": 0.133}
 _WHITE         = {"red": 1.0,   "green": 1.0,   "blue": 1.0}
+_UNCERTAIN_ORANGE = {"red": 1.0, "green": 0.6,   "blue": 0.0}  # valor estimado/nao confirmado por API
+_CREDITO_VERDE    = _MARGIN_GREEN  # valores que entram/beneficiam a margem (créditos, bônus)
+_DEBITO_VERMELHO  = _MARGIN_RED    # valores que saem/reduzem a margem (encargos, custo)
 
 
 def _margin_color(pct):
@@ -113,7 +116,28 @@ def _col_letter(n: int) -> str:
     return result
 
 
-def _build_format_requests(ws, headers, data_rows, margin_col_index: int) -> list:
+def _cell_request(sheet_id, start_row: int, end_row: int, start_col: int, end_col: int, color: dict) -> dict:
+    """repeatCell request para um retângulo de células (índices 0-based, end exclusivo)."""
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId":          sheet_id,
+                "startRowIndex":    start_row,
+                "endRowIndex":      end_row,
+                "startColumnIndex": start_col,
+                "endColumnIndex":   end_col,
+            },
+            "cell": {"userEnteredFormat": {"backgroundColor": color}},
+            "fields": "userEnteredFormat.backgroundColor",
+        }
+    }
+
+
+def _build_format_requests(ws, headers, data_rows, margin_col_index: int,
+                            uncertain_cols_per_row: list | None = None,
+                            credito_cols: list | None = None,
+                            debito_cols: list | None = None,
+                            margem_cols: list | None = None) -> list:
     sheet_id = ws.id
     n_cols   = len(headers)
     requests  = []
@@ -150,29 +174,33 @@ def _build_format_requests(ws, headers, data_rows, margin_col_index: int) -> lis
         }
     })
 
-    # Cores por linha baseadas na margem
-    for i, row in enumerate(data_rows, start=1):
-        try:
-            pct = row[margin_col_index] if margin_col_index < len(row) else None
-            color = _margin_color(pct)
-        except Exception:
-            color = _MARGIN_RED
+    # Reseta o fundo de toda a área de dados (até o fim da aba) para branco antes de
+    # recolorir — ws.clear() só limpa valores, não formatação, então sem isso cores de
+    # uma sincronização anterior (mais linhas, colunas diferentes) ficariam presas.
+    requests.append(_cell_request(sheet_id, 1, max(ws.row_count, 1 + len(data_rows)), 0, n_cols, _WHITE))
 
-        requests.append({
-            "repeatCell": {
-                "range": {
-                    "sheetId":          sheet_id,
-                    "startRowIndex":    i,
-                    "endRowIndex":      i + 1,
-                    "startColumnIndex": 0,
-                    "endColumnIndex":   n_cols,
-                },
-                "cell": {
-                    "userEnteredFormat": {"backgroundColor": color}
-                },
-                "fields": "userEnteredFormat.backgroundColor",
-            }
-        })
+    for i, row in enumerate(data_rows, start=1):
+        # Crédito (verde claro) e débito (vermelho claro), célula a célula
+        for col in (credito_cols or []):
+            requests.append(_cell_request(sheet_id, i, i + 1, col, col + 1, _CREDITO_VERDE))
+        for col in (debito_cols or []):
+            requests.append(_cell_request(sheet_id, i, i + 1, col, col + 1, _DEBITO_VERMELHO))
+
+        # Margem (R$ e %) colorida pela faixa de desempenho
+        if margem_cols:
+            try:
+                pct = row[margin_col_index] if margin_col_index < len(row) else None
+                color = _margin_color(pct)
+            except Exception:
+                color = _MARGIN_RED
+            for col in margem_cols:
+                requests.append(_cell_request(sheet_id, i, i + 1, col, col + 1, color))
+
+    # Laranja por cima, nas células com valor incerto/estimado (aplicado depois → tem prioridade)
+    if uncertain_cols_per_row:
+        for i, cols in enumerate(uncertain_cols_per_row, start=1):
+            for col in cols or []:
+                requests.append(_cell_request(sheet_id, i, i + 1, col, col + 1, _UNCERTAIN_ORANGE))
 
     return requests
 
@@ -184,8 +212,19 @@ def clear_and_write(
     headers: list,
     rows: list,
     margin_col_index: int = -1,
+    uncertain_cols_per_row: list | None = None,
+    credito_cols: list | None = None,
+    debito_cols: list | None = None,
+    margem_cols: list | None = None,
 ) -> None:
-    """Limpa a aba, escreve cabeçalho + linhas e aplica formatação."""
+    """Limpa a aba, escreve cabeçalho + linhas e aplica formatação.
+
+    uncertain_cols_per_row (opcional): lista paralela a `rows`, cada item é a lista
+        de índices de coluna com valor estimado/não confirmado (marcados em laranja).
+    credito_cols/debito_cols (opcional): índices de coluna sempre verde claro / vermelho
+        claro (créditos fiscais e bônus vs. encargos e custo), independente da margem.
+    margem_cols (opcional): índices de coluna coloridos pela faixa de margem (R$ e %).
+    """
     ws.clear()
 
     all_data = [headers] + rows
@@ -195,10 +234,55 @@ def clear_and_write(
         value_input_option="USER_ENTERED",
     )
 
-    if margin_col_index >= 0:
-        fmt_requests = _build_format_requests(ws, headers, rows, margin_col_index)
-        if fmt_requests:
-            ws.spreadsheet.batch_update({"requests": fmt_requests})
+    fmt_requests = _build_format_requests(
+        ws, headers, rows, margin_col_index, uncertain_cols_per_row,
+        credito_cols, debito_cols, margem_cols,
+    )
+    if fmt_requests:
+        ws.spreadsheet.batch_update({"requests": fmt_requests})
+
+
+def append_row_formatted(
+    ws: gspread.Worksheet,
+    headers: list,
+    row: list,
+    margin_col_index: int = -1,
+    uncertain_cols: list | None = None,
+    credito_cols: list | None = None,
+    debito_cols: list | None = None,
+    margem_cols: list | None = None,
+) -> int:
+    """Adiciona uma única linha ao final da aba (sem apagar as demais) e formata:
+    crédito/débito por célula, margem por faixa, laranja nas células incertas.
+
+    Retorna o número da linha (1-based) onde os dados foram escritos.
+    """
+    ws.append_row(row, value_input_option="USER_ENTERED")
+    row_idx  = len(ws.get_all_values())
+    sheet_id = ws.id
+    r0, r1   = row_idx - 1, row_idx  # índices 0-based da linha recém-adicionada
+    n_cols   = len(headers)
+
+    requests = [_cell_request(sheet_id, r0, r1, 0, n_cols, _WHITE)]  # reseta antes de recolorir
+    for col in (credito_cols or []):
+        requests.append(_cell_request(sheet_id, r0, r1, col, col + 1, _CREDITO_VERDE))
+    for col in (debito_cols or []):
+        requests.append(_cell_request(sheet_id, r0, r1, col, col + 1, _DEBITO_VERMELHO))
+    if margem_cols:
+        try:
+            pct = row[margin_col_index] if margin_col_index < len(row) else None
+            color = _margin_color(pct)
+        except Exception:
+            color = _MARGIN_RED
+        for col in margem_cols:
+            requests.append(_cell_request(sheet_id, r0, r1, col, col + 1, color))
+    for col in (uncertain_cols or []):
+        requests.append(_cell_request(sheet_id, r0, r1, col, col + 1, _UNCERTAIN_ORANGE))
+
+    if requests:
+        ws.spreadsheet.batch_update({"requests": requests})
+
+    return row_idx
 
 
 def write_dashboard(ws: gspread.Worksheet, kpis: list[dict]) -> None:

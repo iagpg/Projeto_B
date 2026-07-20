@@ -404,13 +404,28 @@ Google Apps Script — sem executar código local.
 | Função | Descrição |
 |---|---|
 | `sincronizarTudo` | Cache NF + Precificação + Dashboard em sequência |
+| `adicionarAnuncioManual` | Adiciona/atualiza 1 anúncio (MLB ID) ou um grupo de variações (Family ID) na Precificação, sem esperar o sync completo — ver aba "Adicionar Anúncio" |
 | `atualizarCacheNF` | Varre NFs de entrada do Tiny (últimos 12 meses) |
 | `atualizarPrecificacao` | Calcula margens e grava aba Precificação |
 | `atualizarDashboard` | Busca KPIs ML e grava aba Dashboard |
-| `inicializarConfiguracoes` | Grava tokens nas propriedades do script (rodar 1×) |
+| `inicializarConfiguracoes` | Grava client_id/client_secret/user_id nas propriedades do script (rodar 1×, ou se trocar de app) |
+| `autorizarML` / `autorizarTiny` | Autorização OAuth2 inicial direto na planilha — gera o link, você cola o code retornado (ver `08_Autorizacao.gs`) |
 | `instalarTriggerDiario` | Agenda sync automático diário às 6h |
 | `testarConexaoML` | Diagnóstico: testa token ML |
 | `testarConexaoTiny` | Diagnóstico: testa token Tiny |
+
+### Adicionar Anúncio (aba dedicada)
+
+Aba separada da Precificação — que é reescrita do zero a cada sync, então uma
+área fixa dentro dela seria apagada. Cole na célula **B3** um:
+
+- **MLB ID** (ex: `MLB3633227036`) → adiciona ou atualiza 1 linha na Precificação.
+- **Family ID / item_group_id** (14+ dígitos, mesma convenção do `check_promotions.py`)
+  → adiciona a linha "pai" (média das variações, já que cada uma pode ter preço
+  praticado/frete/custo diferente) + uma linha por variação, agrupadas — use o
+  "+"/"−" na lateral esquerda da planilha pra expandir/recolher.
+
+Depois de colar, rode pelo menu **BouwObra → ➕ Adicionar Anúncio**.
 
 ---
 

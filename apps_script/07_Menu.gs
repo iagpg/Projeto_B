@@ -7,6 +7,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('BouwObra')
     .addItem('▶ Sincronizar Tudo', 'sincronizarTudo')
+    .addItem('➕ Adicionar Anúncio (MLB/Family ID)', 'adicionarAnuncioManual')
     .addSeparator()
     .addSubMenu(
       SpreadsheetApp.getUi().createMenu('Operações Individuais')
@@ -31,6 +32,8 @@ function onOpen() {
     .addItem('🔑 Instalar Trigger Diário',   'instalarTriggerDiario')
     .addItem('🗑️ Remover Trigger Diário',    'removerTriggerDiario')
     .addToUi();
+
+  garantirAbaAdicionar();
 }
 
 // ── Sincronização completa ────────────────────────────────────────────────────

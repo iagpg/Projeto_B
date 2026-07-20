@@ -104,6 +104,30 @@ function _r2(v) { return Math.round(v * 100) / 100; }
 
 // ── Escrita na aba Precificação ───────────────────────────────────────────────
 
+// Busca preço praticado (promoção), taxa ML, RT e frete real de um anúncio —
+// reutilizado tanto pela sincronização completa quanto pela adição manual
+// (09_AdicionarAnuncio.gs).
+function montarMlDataCompleto(mlbId, title, status, categoryId, listingTypeId, price) {
+  const promo = getPrecoPraticado(mlbId, price);
+  const fees  = getMlItemFees(promo.precoPraticado, categoryId, listingTypeId);
+  const bonus = getTaxaBonus(mlbId, price, promo.precoPraticado);
+  const frete = getFreteEnvio(mlbId);
+
+  return {
+    mlbId, price, status, categoryId, title,
+    precoPraticado: promo.precoPraticado,
+    promoAtiva:     promo.promoAtiva,
+    promoIncerto:   promo.incerto,
+    taxaPct:    fees.taxaPct,
+    taxaRs:     fees.taxaRs,
+    feesIncerto: fees.incerto,
+    rtValor:    bonus.rtValor,
+    rtIncerto:  bonus.incerto,
+    freteRs:    frete.freteRs,
+    freteIncerto: frete.incerto,
+  };
+}
+
 function atualizarPrecificacao() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.toast('Iniciando Precificação...', 'BouwObra', -1);
@@ -128,32 +152,9 @@ function atualizarPrecificacao() {
     const mlData    = skuMlbMap[sku] || null;
     const custoData = cacheNF[sku]   || null;
 
-    // Busca preço praticado (promoção), taxa ML, RT e frete real se temos o anúncio
-    let mlDataCompleto = null;
-    if (mlData) {
-      const promo = getPrecoPraticado(mlData.mlbId, mlData.price);
-      const fees  = getMlItemFees(promo.precoPraticado, mlData.categoryId, mlData.listingTypeId);
-      const bonus = getTaxaBonus(mlData.mlbId, mlData.price, promo.precoPraticado);
-      const frete = getFreteEnvio(mlData.mlbId);
-
-      mlDataCompleto = {
-        mlbId:      mlData.mlbId,
-        price:      mlData.price,
-        status:     mlData.status,
-        categoryId: mlData.categoryId,
-        title:      mlData.title,
-        precoPraticado: promo.precoPraticado,
-        promoAtiva:     promo.promoAtiva,
-        promoIncerto:   promo.incerto,
-        taxaPct:    fees.taxaPct,
-        taxaRs:     fees.taxaRs,
-        feesIncerto: fees.incerto,
-        rtValor:    bonus.rtValor,
-        rtIncerto:  bonus.incerto,
-        freteRs:    frete.freteRs,
-        freteIncerto: frete.incerto,
-      };
-    }
+    const mlDataCompleto = mlData
+      ? montarMlDataCompleto(mlData.mlbId, mlData.title, mlData.status, mlData.categoryId, mlData.listingTypeId, mlData.price)
+      : null;
 
     const [row, cols] = calcularLinha(sku, mlDataCompleto, custoData, timestamp);
     rows.push(row);
@@ -202,40 +203,46 @@ const _STATUS_CORES = {
   'Migrado': '#cce5ff',
 };
 
+// Cor de UMA linha — reutilizado pela sincronização completa (em lote) e pela
+// adição manual de anúncio/grupo (09_AdicionarAnuncio.gs, linha a linha).
+function _coresParaLinha(row, uncertainColsRow) {
+  const nCols = HEADERS_PREC.length;
+  const linha = new Array(nCols).fill(null); // null = sem cor (padrão)
+
+  CREDITO_COLS.forEach(col => { linha[col] = '#d4edda'; });
+  DEBITO_COLS.forEach(col => { linha[col] = '#f8d7da'; });
+
+  const margem = parseFloat(row[MARGEM_COL_IDX]) || 0;
+  const corMargem = margem >= 20 ? '#d4edda' : margem >= 10 ? '#fff3cd' : '#f8d7da';
+  MARGEM_COLS.forEach(col => { linha[col] = corMargem; });
+
+  const corStatus = _STATUS_CORES[row[STATUS_COL_IDX]];
+  if (corStatus) linha[STATUS_COL_IDX] = corStatus;
+
+  (uncertainColsRow || []).forEach(col => { linha[col] = '#ffa500'; });
+
+  return linha;
+}
+
+// Aplica a validação de dropdown (menu suspenso) da coluna de status a um
+// intervalo de linhas — reutilizado pela sincronização completa e pela adição manual.
+function _aplicarDropdownStatus(ws, startRow, nRows) {
+  const regra = SpreadsheetApp.newDataValidation()
+    .requireValueInList(STATUS_OPTIONS, true)
+    .setAllowInvalid(false)
+    .build();
+  ws.getRange(startRow, STATUS_COL_IDX + 1, nRows, 1).setDataValidation(regra);
+}
+
 // Coloração: crédito (verde) e débito (vermelho) fixos por coluna, margem por
 // faixa de desempenho, status por valor, laranja por cima nas células com
 // valor incerto/estimado. Um único setBackgrounds() sobre a área inteira —
 // evita milhares de chamadas individuais (lento e sujeito a limite de
 // execução do Apps Script).
 function _colorirLinhas(ws, rows, uncertainCols) {
-  const nCols = HEADERS_PREC.length;
-
-  const bg = rows.map((row, i) => {
-    const linha = new Array(nCols).fill(null); // null = sem cor (padrão)
-
-    CREDITO_COLS.forEach(col => { linha[col] = '#d4edda'; });
-    DEBITO_COLS.forEach(col => { linha[col] = '#f8d7da'; });
-
-    const margem = parseFloat(row[MARGEM_COL_IDX]) || 0;
-    const corMargem = margem >= 20 ? '#d4edda' : margem >= 10 ? '#fff3cd' : '#f8d7da';
-    MARGEM_COLS.forEach(col => { linha[col] = corMargem; });
-
-    const corStatus = _STATUS_CORES[row[STATUS_COL_IDX]];
-    if (corStatus) linha[STATUS_COL_IDX] = corStatus;
-
-    (uncertainCols[i] || []).forEach(col => { linha[col] = '#ffa500'; });
-
-    return linha;
-  });
-
-  ws.getRange(2, 1, rows.length, nCols).setBackgrounds(bg);
-
-  // Dropdown (menu suspenso) na coluna de status
-  const regra = SpreadsheetApp.newDataValidation()
-    .requireValueInList(STATUS_OPTIONS, true)
-    .setAllowInvalid(false)
-    .build();
-  ws.getRange(2, STATUS_COL_IDX + 1, rows.length, 1).setDataValidation(regra);
+  const bg = rows.map((row, i) => _coresParaLinha(row, uncertainCols[i]));
+  ws.getRange(2, 1, rows.length, HEADERS_PREC.length).setBackgrounds(bg);
+  _aplicarDropdownStatus(ws, 2, rows.length);
 }
 
 // Formatos numéricos
@@ -248,15 +255,15 @@ function _formatarColunas(ws, nRows) {
   ws.getRange(2, 5, nRows, 2).setNumberFormat(R$);
   // Taxa ML % (G)
   ws.getRange(2, 7, nRows, 1).setNumberFormat(PCT);
-  // RT..Margem R$ (H..S) → R$
-  ws.getRange(2, 8, nRows, 12).setNumberFormat(R$);
-  // Margem % (T)
-  ws.getRange(2, 20, nRows, 1).setNumberFormat(PCT);
+  // RT..Margem R$ (H..U) → R$
+  ws.getRange(2, 8, nRows, 14).setNumberFormat(R$);
+  // Margem % (V)
+  ws.getRange(2, 22, nRows, 1).setNumberFormat(PCT);
 
   // Colunas de texto
   ws.setColumnWidth(1, 140);  // A ID ML
   ws.setColumnWidth(2, 90);   // B SKU
   ws.setColumnWidth(3, 220);  // C Nome
   ws.setColumnWidth(4, 120);  // D Categoria
-  ws.autoResizeColumns(21, 2);// U..V (Status, Última Atualização)
+  ws.autoResizeColumns(23, 2);// W..X (Status, Última Atualização)
 }

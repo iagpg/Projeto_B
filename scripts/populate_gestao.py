@@ -55,6 +55,8 @@ from services.precificacao_service import (
     CREDITO_COLS,
     DEBITO_COLS,
     MARGEM_COLS,
+    STATUS_COL_INDEX,
+    STATUS_OPTIONS,
 )
 
 
@@ -283,6 +285,8 @@ def main():
             credito_cols=CREDITO_COLS,
             debito_cols=DEBITO_COLS,
             margem_cols=MARGEM_COLS,
+            status_col_index=STATUS_COL_INDEX,
+            status_options=STATUS_OPTIONS,
         )
         print(f"  ✓ Aba Precificação atualizada ({len(rows)} produtos)")
     except Exception as e:

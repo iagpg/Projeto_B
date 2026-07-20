@@ -65,6 +65,16 @@ const CREDITO_COLS = [7, 14, 15, 16, 17];  // RT + ICMS/PIS/COFINS crédito + Im
 const DEBITO_COLS  = [8, 9, 10, 11, 12, 13]; // Frete, ICMS/PIS/COFINS venda, Comissão+Frete, Custo NF
 const MARGEM_COLS  = [18, MARGEM_COL_IDX];   // Margem Líquida (R$) e (%)
 
+// Status Anúncio (U) — dropdown + cor fixa por valor
+const STATUS_COL_IDX = 20;
+const STATUS_OPTIONS = ['Ativo', 'Pausado', 'Fechado', 'Migrado', '—'];
+
+// TODO (confirmado com a contadora em 12/06/2026): comissão ML + frete de venda
+// são despesas que geram crédito de PIS/COFINS (1,65%/7,6%) no Lucro Real, igual
+// ao custo de compra. AINDA NÃO IMPLEMENTADO aqui — decisão foi manter a coluna M
+// só como débito por ora. Quando for implementado, esse crédito deve ENTRAR
+// COMO CRÉDITO POSITIVO na margem, nunca como redução do débito existente.
+
 // Abas auxiliares
 const ABA_ALERTAS = 'Alertas';
 

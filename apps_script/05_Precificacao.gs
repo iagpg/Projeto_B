@@ -183,10 +183,19 @@ function atualizarPrecificacao() {
   ss.toast(`✅ Precificação atualizada: ${rowsOrdenadas.length} produtos.`, 'BouwObra', 8);
 }
 
+// Status Anúncio — mesma paleta de scripts/validate_skus.py (Verde/Cinza/Vermelho/Azul)
+const _STATUS_CORES = {
+  'Ativo':   '#d4edda',
+  'Pausado': '#e2e3e5',
+  'Fechado': '#f8d7da',
+  'Migrado': '#cce5ff',
+};
+
 // Coloração: crédito (verde) e débito (vermelho) fixos por coluna, margem por
-// faixa de desempenho, laranja por cima nas células com valor incerto/estimado.
-// Um único setBackgrounds() sobre a área inteira — evita milhares de chamadas
-// individuais (lento e sujeito a limite de execução do Apps Script).
+// faixa de desempenho, status por valor, laranja por cima nas células com
+// valor incerto/estimado. Um único setBackgrounds() sobre a área inteira —
+// evita milhares de chamadas individuais (lento e sujeito a limite de
+// execução do Apps Script).
 function _colorirLinhas(ws, rows, uncertainCols) {
   const nCols = HEADERS_PREC.length;
 
@@ -200,12 +209,22 @@ function _colorirLinhas(ws, rows, uncertainCols) {
     const corMargem = margem >= 20 ? '#d4edda' : margem >= 10 ? '#fff3cd' : '#f8d7da';
     MARGEM_COLS.forEach(col => { linha[col] = corMargem; });
 
+    const corStatus = _STATUS_CORES[row[STATUS_COL_IDX]];
+    if (corStatus) linha[STATUS_COL_IDX] = corStatus;
+
     (uncertainCols[i] || []).forEach(col => { linha[col] = '#ffa500'; });
 
     return linha;
   });
 
   ws.getRange(2, 1, rows.length, nCols).setBackgrounds(bg);
+
+  // Dropdown (menu suspenso) na coluna de status
+  const regra = SpreadsheetApp.newDataValidation()
+    .requireValueInList(STATUS_OPTIONS, true)
+    .setAllowInvalid(false)
+    .build();
+  ws.getRange(2, STATUS_COL_IDX + 1, rows.length, 1).setDataValidation(regra);
 }
 
 // Formatos numéricos

@@ -94,6 +94,16 @@ _UNCERTAIN_ORANGE = {"red": 1.0, "green": 0.6,   "blue": 0.0}  # valor estimado/
 _CREDITO_VERDE    = _MARGIN_GREEN  # valores que entram/beneficiam a margem (créditos, bônus)
 _DEBITO_VERMELHO  = _MARGIN_RED    # valores que saem/reduzem a margem (encargos, custo)
 
+# Status Anúncio — mesma paleta de scripts/validate_skus.py (Verde/Cinza/Vermelho/Azul)
+_STATUS_CINZA = {"red": 0.886, "green": 0.890, "blue": 0.898}
+_STATUS_AZUL  = {"red": 0.800, "green": 0.894, "blue": 1.0}
+_STATUS_COLORS = {
+    "Ativo":   _MARGIN_GREEN,
+    "Pausado": _STATUS_CINZA,
+    "Fechado": _MARGIN_RED,
+    "Migrado": _STATUS_AZUL,
+}
+
 
 def _margin_color(pct):
     try:
@@ -133,11 +143,36 @@ def _cell_request(sheet_id, start_row: int, end_row: int, start_col: int, end_co
     }
 
 
+def _data_validation_request(sheet_id, start_row: int, end_row: int, col: int, options: list) -> dict:
+    """Dropdown (menu suspenso) restrito a uma lista de valores para uma coluna inteira."""
+    return {
+        "setDataValidation": {
+            "range": {
+                "sheetId":          sheet_id,
+                "startRowIndex":    start_row,
+                "endRowIndex":      end_row,
+                "startColumnIndex": col,
+                "endColumnIndex":   col + 1,
+            },
+            "rule": {
+                "condition": {
+                    "type":   "ONE_OF_LIST",
+                    "values": [{"userEnteredValue": v} for v in options],
+                },
+                "showCustomUi": True,
+                "strict": True,
+            },
+        }
+    }
+
+
 def _build_format_requests(ws, headers, data_rows, margin_col_index: int,
                             uncertain_cols_per_row: list | None = None,
                             credito_cols: list | None = None,
                             debito_cols: list | None = None,
-                            margem_cols: list | None = None) -> list:
+                            margem_cols: list | None = None,
+                            status_col_index: int | None = None,
+                            status_options: list | None = None) -> list:
     sheet_id = ws.id
     n_cols   = len(headers)
     requests  = []
@@ -196,11 +231,22 @@ def _build_format_requests(ws, headers, data_rows, margin_col_index: int,
             for col in margem_cols:
                 requests.append(_cell_request(sheet_id, i, i + 1, col, col + 1, color))
 
+        # Status Anúncio — cor fixa por valor (Ativo=verde, Pausado=cinza, Fechado=vermelho, Migrado=azul)
+        if status_col_index is not None:
+            status_val = row[status_col_index] if status_col_index < len(row) else None
+            color = _STATUS_COLORS.get(status_val)
+            if color:
+                requests.append(_cell_request(sheet_id, i, i + 1, status_col_index, status_col_index + 1, color))
+
     # Laranja por cima, nas células com valor incerto/estimado (aplicado depois → tem prioridade)
     if uncertain_cols_per_row:
         for i, cols in enumerate(uncertain_cols_per_row, start=1):
             for col in cols or []:
                 requests.append(_cell_request(sheet_id, i, i + 1, col, col + 1, _UNCERTAIN_ORANGE))
+
+    # Dropdown (menu suspenso) na coluna de status
+    if status_col_index is not None and status_options and data_rows:
+        requests.append(_data_validation_request(sheet_id, 1, 1 + len(data_rows), status_col_index, status_options))
 
     return requests
 
@@ -216,6 +262,8 @@ def clear_and_write(
     credito_cols: list | None = None,
     debito_cols: list | None = None,
     margem_cols: list | None = None,
+    status_col_index: int | None = None,
+    status_options: list | None = None,
 ) -> None:
     """Limpa a aba, escreve cabeçalho + linhas e aplica formatação.
 
@@ -224,6 +272,8 @@ def clear_and_write(
     credito_cols/debito_cols (opcional): índices de coluna sempre verde claro / vermelho
         claro (créditos fiscais e bônus vs. encargos e custo), independente da margem.
     margem_cols (opcional): índices de coluna coloridos pela faixa de margem (R$ e %).
+    status_col_index/status_options (opcional): coluna com dropdown (menu suspenso)
+        restrito a status_options, colorida por valor (ver _STATUS_COLORS).
     """
     ws.clear()
 
@@ -236,7 +286,7 @@ def clear_and_write(
 
     fmt_requests = _build_format_requests(
         ws, headers, rows, margin_col_index, uncertain_cols_per_row,
-        credito_cols, debito_cols, margem_cols,
+        credito_cols, debito_cols, margem_cols, status_col_index, status_options,
     )
     if fmt_requests:
         ws.spreadsheet.batch_update({"requests": fmt_requests})
@@ -251,9 +301,12 @@ def append_row_formatted(
     credito_cols: list | None = None,
     debito_cols: list | None = None,
     margem_cols: list | None = None,
+    status_col_index: int | None = None,
+    status_options: list | None = None,
 ) -> int:
     """Adiciona uma única linha ao final da aba (sem apagar as demais) e formata:
-    crédito/débito por célula, margem por faixa, laranja nas células incertas.
+    crédito/débito por célula, margem por faixa, laranja nas células incertas,
+    dropdown + cor na coluna de status.
 
     Retorna o número da linha (1-based) onde os dados foram escritos.
     """
@@ -278,6 +331,14 @@ def append_row_formatted(
             requests.append(_cell_request(sheet_id, r0, r1, col, col + 1, color))
     for col in (uncertain_cols or []):
         requests.append(_cell_request(sheet_id, r0, r1, col, col + 1, _UNCERTAIN_ORANGE))
+
+    if status_col_index is not None:
+        status_val = row[status_col_index] if status_col_index < len(row) else None
+        color = _STATUS_COLORS.get(status_val)
+        if color:
+            requests.append(_cell_request(sheet_id, r0, r1, status_col_index, status_col_index + 1, color))
+        if status_options:
+            requests.append(_data_validation_request(sheet_id, r0, r1, status_col_index, status_options))
 
     if requests:
         ws.spreadsheet.batch_update({"requests": requests})

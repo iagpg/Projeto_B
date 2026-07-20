@@ -121,7 +121,7 @@ function atualizarPrecificacao() {
     let mlDataCompleto = null;
     if (mlData) {
       const promo = getPrecoPraticado(mlData.mlbId, mlData.price);
-      const fees  = getMlItemFees(mlData.mlbId, promo.precoPraticado);
+      const fees  = getMlItemFees(promo.precoPraticado, mlData.categoryId, mlData.listingTypeId);
       const bonus = getTaxaBonus(mlData.mlbId, mlData.price, promo.precoPraticado);
       const frete = getFreteEnvio(mlData.mlbId);
 

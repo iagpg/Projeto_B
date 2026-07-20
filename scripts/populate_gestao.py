@@ -168,19 +168,25 @@ def main():
         ml_entry = sku_mlb_map.get(sku)
         ml_data  = None
         if ml_entry:
-            mlb_id = ml_entry.get("mlb_id", "")
-            price  = ml_entry.get("price", 0.0)
+            mlb_id          = ml_entry.get("mlb_id", "")
+            price           = ml_entry.get("price", 0.0)
+            category_id     = ml_entry.get("category_id", "")
+            listing_type_id = ml_entry.get("listing_type_id", "")
 
-            # Taxa ML e preço praticado (cache por mlb_id para não repetir chamadas)
-            if mlb_id not in fees_cache:
-                fees_cache[mlb_id] = get_item_fees(mlb_id, price)
-                time.sleep(0.05)
+            # Preço praticado (promoção) — específico do anúncio, sem cache possível
             if mlb_id not in promo_cache:
                 promo_cache[mlb_id] = get_current_price(mlb_id, price)
                 time.sleep(0.05)
-
-            fees  = fees_cache[mlb_id]
             promo = promo_cache[mlb_id]
+
+            # Taxa ML — a % de comissão é estável por categoria+tipo de anúncio,
+            # então cacheia por esse par em vez de por mlb_id (evita reconsultar
+            # /sites/MLB/listing_prices para cada SKU da mesma categoria)
+            fees_key = (category_id, listing_type_id)
+            if fees_key not in fees_cache:
+                fees_cache[fees_key] = get_item_fees(promo["preco_praticado"], category_id, listing_type_id)
+                time.sleep(0.05)
+            fees = fees_cache[fees_key]
 
             if mlb_id not in bonus_cache:
                 bonus_cache[mlb_id] = get_taxa_bonus(mlb_id, price, promo.get("preco_praticado", price))

@@ -23,7 +23,7 @@ function extrairSellerSku(item) {
 
 // ── Mapa SKU → dados do anúncio ───────────────────────────────────────────────
 
-// Pagina TODOS os anúncios do vendedor e retorna dict SKU → {mlbId, price, status, categoryId, title}
+// Pagina TODOS os anúncios do vendedor e retorna dict SKU → {mlbId, price, status, categoryId, listingTypeId, title}
 function buildSkuMlbMap() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.toast('Mapeando anúncios ML por SKU...', 'BouwObra', -1);
@@ -44,16 +44,17 @@ function buildSkuMlbMap() {
   const skuMap = {};
   for (let i = 0; i < allIds.length; i += 20) {
     const chunk = allIds.slice(i, i + 20);
-    const items = mlGetBatch(chunk, 'id,title,price,status,category_id,seller_sku,attributes');
+    const items = mlGetBatch(chunk, 'id,title,price,status,category_id,seller_sku,attributes,listing_type_id');
     items.forEach(item => {
       const sku = extrairSellerSku(item);
       if (sku) {
         skuMap[sku] = {
-          mlbId:      item.id,
-          price:      parseFloat(item.price) || 0,
-          status:     item.status || '',
-          categoryId: item.category_id || '',
-          title:      item.title || '',
+          mlbId:         item.id,
+          price:         parseFloat(item.price) || 0,
+          status:        item.status || '',
+          categoryId:    item.category_id || '',
+          listingTypeId: item.listing_type_id || '',
+          title:         item.title || '',
         };
       }
     });
@@ -67,18 +68,25 @@ function buildSkuMlbMap() {
 // GET /users/{id}/items/{id}/fees está quebrado (retorna {}) — a taxa real vem
 // de GET /sites/MLB/listing_prices?price=...&category_id=..., filtrando pelo
 // listing_type_id do próprio anúncio (Clássico=12%, Premium=17% etc.).
-
-// Cache de taxas em memória (por execução)
+//
+// categoryId/listingTypeId já vêm de buildSkuMlbMap() (mesmo lote de busca dos
+// anúncios) — não é preciso buscar o item de novo aqui. Cache por categoria+tipo
+// (a % de comissão é estável nesse par, não muda por SKU), o que reduz bastante
+// as chamadas repetidas quando muitos produtos compartilham categoria.
 const _feesCache_ = {};
 
-function getMlItemFees(mlbId, price) {
-  const cacheKey = mlbId + ':' + price;
-  if (_feesCache_[cacheKey]) return _feesCache_[cacheKey];
+function getMlItemFees(price, categoryId, listingTypeId) {
+  const cacheKey = categoryId + '|' + listingTypeId;
+  if (_feesCache_[cacheKey]) {
+    const cached = _feesCache_[cacheKey];
+    return {
+      taxaRs: Math.round(price * cached.taxaPct / 100 * 100) / 100,
+      taxaPct: cached.taxaPct,
+      incerto: cached.incerto,
+    };
+  }
 
   try {
-    const item = mlGet(`/items/${mlbId}`, { attributes: 'category_id,listing_type_id' });
-    const categoryId    = item && item.category_id;
-    const listingTypeId = item && item.listing_type_id;
     if (!categoryId || !listingTypeId) throw new Error('category_id/listing_type_id ausente');
 
     const options = mlGet('/sites/MLB/listing_prices', { price, category_id: categoryId });
@@ -87,27 +95,21 @@ function getMlItemFees(mlbId, price) {
     const match = options.find(o => o.listing_type_id === listingTypeId);
     if (!match) throw new Error(`listing_type_id '${listingTypeId}' não encontrado`);
 
-    const saleRs  = parseFloat(match.sale_fee_amount) || 0;
-    const freteRs = parseFloat(match.shipping_fee_amount) || 0;
-    const pct = price > 0 ? Math.round(saleRs / price * 10000) / 100 : ML_TAXA_DEFAULT;
-    const result = {
-      taxaRs: Math.round(saleRs * 100) / 100,
-      taxaPct: pct,
-      freteRs: Math.round(freteRs * 100) / 100,
-      incerto: false,
-    };
-    _feesCache_[cacheKey] = result;
-    return result;
+    const saleRs = parseFloat(match.sale_fee_amount) || 0;
+    const pct = match.percentage_fee !== undefined
+      ? parseFloat(match.percentage_fee)
+      : (price > 0 ? Math.round(saleRs / price * 10000) / 100 : ML_TAXA_DEFAULT);
+
+    _feesCache_[cacheKey] = { taxaPct: pct, incerto: false };
+    return { taxaRs: Math.round(saleRs * 100) / 100, taxaPct: pct, incerto: false };
   } catch (e) {
     // Fallback: taxa default — valor NÃO confirmado pela API
-    const fallback = {
+    _feesCache_[cacheKey] = { taxaPct: ML_TAXA_DEFAULT, incerto: true };
+    return {
       taxaRs: Math.round(price * ML_TAXA_DEFAULT / 100 * 100) / 100,
       taxaPct: ML_TAXA_DEFAULT,
-      freteRs: 0,
       incerto: true,
     };
-    _feesCache_[cacheKey] = fallback;
-    return fallback;
   }
 }
 

@@ -8,7 +8,7 @@ Uso:
 
     kpis = get_vendas_mes()   # {"total_R$": 15000.0, "count": 42, "ticket_medio": 357.14}
     hoje = get_pedidos_hoje() # {"count": 5}
-    taxa = get_item_fees("MLB1234567890", 99.90)  # {"taxa_pct": 14.0, "taxa_R$": 13.99, "frete_R$": 0}
+    taxa = get_item_fees(99.90, "MLB1234", "gold_special")  # {"taxa_pct": 12.0, "taxa_R$": 11.88, ...}
 """
 
 import json
@@ -186,19 +186,19 @@ def get_anuncios_status() -> dict:
 
 # ── Taxas ML ──────────────────────────────────────────────────────────────────
 
-def get_item_fees(mlb_id: str, price: float) -> dict:
+def get_item_fees(price: float, category_id: str, listing_type_id: str) -> dict:
     """
     Retorna a taxa real do ML para um anúncio em R$, via
     GET /sites/MLB/listing_prices?price=...&category_id=...,
     filtrando pelo listing_type_id do próprio anúncio.
+
+    category_id e listing_type_id vêm de build_sku_mlb_map() (já inclusos no
+    lote de busca dos anúncios) — não é preciso buscar o item de novo aqui.
     Fallback: taxa default de config.json (marca "incerto": True).
     """
     try:
-        item = _get(f"{_BASE}/items/{mlb_id}", {"attributes": "category_id,listing_type_id"})
-        category_id     = item.get("category_id") if isinstance(item, dict) else None
-        listing_type_id  = item.get("listing_type_id") if isinstance(item, dict) else None
         if not category_id or not listing_type_id:
-            raise ValueError("category_id/listing_type_id ausente no anúncio")
+            raise ValueError("category_id/listing_type_id ausente")
 
         options = _get(f"{_BASE}/sites/MLB/listing_prices", {
             "price":       price,
@@ -314,12 +314,14 @@ def build_sku_mlb_map() -> dict:
 
     print(f"  Total de anúncios ML: {len(all_ids)}")
 
+    from connectors.mercadolivre.client import extract_seller_sku
+
     sku_map: dict = {}
     for i in range(0, len(all_ids), 20):
         chunk = all_ids[i:i + 20]
         batch = _get(f"{_BASE}/items", {
             "ids":        ",".join(chunk),
-            "attributes": "id,title,price,status,category_id,seller_sku",
+            "attributes": "id,title,price,status,category_id,seller_sku,attributes,listing_type_id",
         })
         if isinstance(batch, list):
             for entry in batch:
@@ -328,14 +330,15 @@ def build_sku_mlb_map() -> dict:
                 body = entry.get("body", {})
                 if not isinstance(body, dict) or not body.get("id"):
                     continue
-                sku = str(body.get("seller_sku") or "").strip()
+                sku = extract_seller_sku(body)
                 if sku:
                     sku_map[sku] = {
-                        "mlb_id":      body["id"],
-                        "price":       float(body.get("price") or 0),
-                        "status":      body.get("status", ""),
-                        "category_id": body.get("category_id", ""),
-                        "title":       body.get("title", ""),
+                        "mlb_id":         body["id"],
+                        "price":          float(body.get("price") or 0),
+                        "status":         body.get("status", ""),
+                        "category_id":    body.get("category_id", ""),
+                        "listing_type_id": body.get("listing_type_id", ""),
+                        "title":          body.get("title", ""),
                     }
         time.sleep(0.1)
 

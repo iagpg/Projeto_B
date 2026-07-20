@@ -81,22 +81,23 @@ def checar_anuncio_ml(mlb_id: str, sku_esperado: str | None = None):
     print(f"\n[2] Anuncio ML - {mlb_id}")
     data = ml_get(
         f"{_BASE}/items/{mlb_id}",
-        {"attributes": _ATTRS + ",price,category_id,shipping"},
+        {"attributes": _ATTRS + ",price,category_id,listing_type_id,shipping"},
     )
     if not data or not data.get("id"):
         print(f"    ERRO: Anuncio {mlb_id} nao encontrado (HTTP 404 ou sem id).")
         return None
 
-    seller_sku = extract_seller_sku(data)
-    price      = float(data.get("price") or 0)
-    status     = data.get("status", "")
-    title      = data.get("title", "")
-    category   = data.get("category_id", "")
+    seller_sku      = extract_seller_sku(data)
+    price           = float(data.get("price") or 0)
+    status          = data.get("status", "")
+    title           = data.get("title", "")
+    category        = data.get("category_id", "")
+    listing_type_id = data.get("listing_type_id", "")
 
     print(f"    Titulo      : {title}")
     print(f"    Status      : {status}")
     print(f"    Preco       : {_brl(price)}")
-    print(f"    Categoria   : {category}")
+    print(f"    Categoria   : {category}  (listing_type: {listing_type_id})")
     print(f"    seller_sku  : {seller_sku or '(vazio)'}")
 
     if not seller_sku:
@@ -111,7 +112,8 @@ def checar_anuncio_ml(mlb_id: str, sku_esperado: str | None = None):
         print(f"    SKU OK: '{seller_sku}'")
 
     return {"mlbId": mlb_id, "price": price, "status": status,
-            "categoryId": category, "title": title, "seller_sku": seller_sku}
+            "categoryId": category, "listingTypeId": listing_type_id,
+            "title": title, "seller_sku": seller_sku}
 
 
 # ── 3. Preco praticado (promocao) + Taxas ML ──────────────────────────────────
@@ -129,9 +131,9 @@ def checar_preco_praticado(mlb_id: str, preco_base: float):
     return promo
 
 
-def checar_taxas_ml(mlb_id: str, price: float):
+def checar_taxas_ml(mlb_id: str, price: float, category_id: str, listing_type_id: str):
     print(f"\n[4] Taxas ML - {mlb_id}  (preco praticado={_brl(price).strip()})")
-    fees = get_item_fees(mlb_id, price)
+    fees = get_item_fees(price, category_id, listing_type_id)
     if fees["incerto"]:
         print("    AVISO: API de taxas indisponivel, usando fallback de config.json.")
     print(f"    Comissao    : {_brl(fees['taxa_R$'])}  ({_pct(fees['taxa_pct']).strip()})")
@@ -259,7 +261,8 @@ def main():
 
     if ml_data and ml_data["price"] > 0:
         promo = checar_preco_praticado(mlb_id, ml_data["price"])
-        fees  = checar_taxas_ml(mlb_id, promo["preco_praticado"])
+        fees  = checar_taxas_ml(mlb_id, promo["preco_praticado"],
+                                ml_data["categoryId"], ml_data["listingTypeId"])
         frete = checar_frete(mlb_id)
         bonus = checar_rt(mlb_id, ml_data["price"], promo["preco_praticado"])
         margem = calcular_margem(ml_data, fees, custo, promo["preco_praticado"],

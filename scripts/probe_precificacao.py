@@ -178,6 +178,10 @@ def calcular_margem(ml_data: dict, fees: dict, custo, preco_praticado: float,
     pis_venda    = _r2(base_pis_cofins * PIS_VENDA)
     cofins_venda = _r2(base_pis_cofins * COFINS_VENDA)
 
+    # Crédito de PIS/COFINS sobre comissão+frete (confirmado com a contadora, 12/06/2026)
+    credito_pis_com_frete    = _r2(comissao_frete * PIS_VENDA)
+    credito_cofins_com_frete = _r2(comissao_frete * COFINS_VENDA)
+
     if custo:
         custo_nf    = _r2(custo.custo_base + custo.ipi_valor)
         icms_cred   = _r2(custo.icms_credito)
@@ -187,7 +191,10 @@ def calcular_margem(ml_data: dict, fees: dict, custo, preco_praticado: float,
     else:
         custo_nf = icms_cred = pis_cred = cofins_cred = imp_recup = 0.0
 
-    margem_rs  = _r2(preco - comissao_frete - icms_venda - pis_venda - cofins_venda - custo_nf + imp_recup)
+    margem_rs  = _r2(
+        preco - comissao_frete - icms_venda - pis_venda - cofins_venda - custo_nf
+        + imp_recup + credito_pis_com_frete + credito_cofins_com_frete
+    )
     margem_pct = _r2(margem_rs / preco * 100) if preco else 0.0
 
     print(f"\n[7] Calculo Lucro Real (sobre o preco praticado)")
@@ -197,6 +204,8 @@ def calcular_margem(ml_data: dict, fees: dict, custo, preco_praticado: float,
     print(f"  (-) Comissao ML         : {_brl(taxa_rs)}  ({_pct(taxa_pct).strip()})")
     print(f"  (+) RT (bonus Meli)     : {_brl(rt_valor)}")
     print(f"  (-) Frete ML            : {_brl(frete_rs)}")
+    print(f"  (+) PIS credito com/frete   : {_brl(credito_pis_com_frete)}")
+    print(f"  (+) COFINS credito com/frete: {_brl(credito_cofins_com_frete)}")
     print(f"  (-) ICMS venda          : {_brl(icms_venda)}  (18%)")
     print(f"  (-) PIS venda           : {_brl(pis_venda)}  (1,65%)")
     print(f"  (-) COFINS venda        : {_brl(cofins_venda)}  (7,6%)")

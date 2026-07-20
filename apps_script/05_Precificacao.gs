@@ -35,6 +35,12 @@ function calcularLinha(sku, mlData, custoData, timestamp) {
   const pisVenda       = _r2(basePisCofins * PIS_VENDA);
   const cofinsVenda    = _r2(basePisCofins * COFINS_VENDA);
 
+  // Crédito de PIS/COFINS sobre comissão+frete — confirmado com a contadora
+  // (12/06/2026): despesas de venda (comissão de intermediação + frete na
+  // operação de venda) geram crédito no Lucro Real, mesma alíquota da venda.
+  const creditoPisComFrete    = _r2(comissaoFrete * PIS_VENDA);
+  const creditoCofinsComFrete = _r2(comissaoFrete * COFINS_VENDA);
+
   // Custo e créditos fiscais da compra — valores absolutos da NF
   let custoNf = 0, icmsCred = 0, pisCred = 0, cofinsCred = 0, impRecup = 0;
   if (custoData) {
@@ -51,7 +57,10 @@ function calcularLinha(sku, mlData, custoData, timestamp) {
   }
 
   // Margem
-  const margemRs  = _r2(preco - comissaoFrete - icmsVenda - pisVenda - cofinsVenda - custoNf + impRecup);
+  const margemRs  = _r2(
+    preco - comissaoFrete - icmsVenda - pisVenda - cofinsVenda - custoNf
+    + impRecup + creditoPisComFrete + creditoCofinsComFrete
+  );
   const margemPct = preco > 0 ? _r2(margemRs / preco * 100) : 0;
 
   const row = [
@@ -68,23 +77,25 @@ function calcularLinha(sku, mlData, custoData, timestamp) {
     pisVenda,          // K 10 PIS Venda
     cofinsVenda,       // L 11 COFINS Venda
     comissaoFrete,     // M 12 Comissão + Frete
-    custoNf,           // N 13 Custo NF c/ IPI
-    icmsCred,          // O 14 ICMS Compra crédito
-    pisCred,           // P 15 PIS Compra crédito
-    cofinsCred,        // Q 16 COFINS Compra crédito
-    impRecup,          // R 17 Imposto Recuperável
-    margemRs,          // S 18 Margem Líquida (R$)
-    margemPct,         // T 19 Margem Líquida (%)
-    statusMl(status),  // U 20 Status Anúncio
-    timestamp,         // V 21 Última Atualização
+    creditoPisComFrete,    // N 13 PIS Crédito s/ Comissão+Frete
+    creditoCofinsComFrete, // O 14 COFINS Crédito s/ Comissão+Frete
+    custoNf,           // P 15 Custo NF c/ IPI
+    icmsCred,          // Q 16 ICMS Compra crédito
+    pisCred,           // R 17 PIS Compra crédito
+    cofinsCred,        // S 18 COFINS Compra crédito
+    impRecup,          // T 19 Imposto Recuperável
+    margemRs,          // U 20 Margem Líquida (R$)
+    margemPct,         // V 21 Margem Líquida (%)
+    statusMl(status),  // W 22 Status Anúncio
+    timestamp,         // X 23 Última Atualização
   ];
 
   const uncertainCols = [];
   if (mlData && mlData.promoIncerto)  uncertainCols.push(5);            // F — Preço Praticado
-  if (mlData && mlData.feesIncerto) { uncertainCols.push(6); uncertainCols.push(12); } // G, M
+  if (mlData && mlData.feesIncerto) { uncertainCols.push(6); uncertainCols.push(12); uncertainCols.push(13); uncertainCols.push(14); } // G, M, N, O
   if (mlData && mlData.rtIncerto)     uncertainCols.push(7);            // H — RT
-  if (mlData && mlData.freteIncerto) { uncertainCols.push(8); uncertainCols.push(12); } // I, M
-  if (!custoData)                     uncertainCols.push(13);           // N — Custo NF
+  if (mlData && mlData.freteIncerto) { uncertainCols.push(8); uncertainCols.push(12); uncertainCols.push(13); uncertainCols.push(14); } // I, M, N, O
+  if (!custoData)                     uncertainCols.push(15);           // P — Custo NF
 
   return [row, uncertainCols];
 }

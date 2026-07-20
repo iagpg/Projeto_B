@@ -143,6 +143,29 @@ def _cell_request(sheet_id, start_row: int, end_row: int, start_col: int, end_co
     }
 
 
+def _reset_format_request(sheet_id, start_row: int, end_row: int, start_col: int, end_col: int) -> dict:
+    """Reseta TODA a formatação (cor, numberFormat, etc.) de um retângulo para o padrão.
+
+    ws.clear() só limpa valores, não formatação — sem isso, um numberFormat de
+    data/moeda de uma sincronização anterior (com outro layout de colunas) fica
+    preso na célula e distorce a exibição de um valor numérico novo (ex: 12.73
+    sendo lido como data-serial em vez de percentual).
+    """
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId":          sheet_id,
+                "startRowIndex":    start_row,
+                "endRowIndex":      end_row,
+                "startColumnIndex": start_col,
+                "endColumnIndex":   end_col,
+            },
+            "cell": {"userEnteredFormat": {"backgroundColor": _WHITE}},
+            "fields": "userEnteredFormat",
+        }
+    }
+
+
 def _data_validation_request(sheet_id, start_row: int, end_row: int, col: int, options: list) -> dict:
     """Dropdown (menu suspenso) restrito a uma lista de valores para uma coluna inteira."""
     return {
@@ -209,10 +232,13 @@ def _build_format_requests(ws, headers, data_rows, margin_col_index: int,
         }
     })
 
-    # Reseta o fundo de toda a área de dados (até o fim da aba) para branco antes de
-    # recolorir — ws.clear() só limpa valores, não formatação, então sem isso cores de
-    # uma sincronização anterior (mais linhas, colunas diferentes) ficariam presas.
-    requests.append(_cell_request(sheet_id, 1, max(ws.row_count, 1 + len(data_rows)), 0, n_cols, _WHITE))
+    # Reseta TODA a formatação da área de dados (até o fim da aba) antes de
+    # recolorir — ws.clear() só limpa valores, não formatação, então sem isso
+    # cores/numberFormat de uma sincronização anterior (mais linhas ou colunas,
+    # layout diferente) ficariam presos.
+    requests.append(_reset_format_request(
+        sheet_id, 1, max(ws.row_count, 1 + len(data_rows)), 0, max(ws.col_count, n_cols),
+    ))
 
     for i, row in enumerate(data_rows, start=1):
         # Crédito (verde claro) e débito (vermelho claro), célula a célula
@@ -281,7 +307,7 @@ def clear_and_write(
     ws.update(
         range_name=f"A1:{_col_letter(len(headers))}{len(all_data)}",
         values=all_data,
-        value_input_option="USER_ENTERED",
+        value_input_option="RAW",
     )
 
     fmt_requests = _build_format_requests(
@@ -310,13 +336,13 @@ def append_row_formatted(
 
     Retorna o número da linha (1-based) onde os dados foram escritos.
     """
-    ws.append_row(row, value_input_option="USER_ENTERED")
+    ws.append_row(row, value_input_option="RAW")
     row_idx  = len(ws.get_all_values())
     sheet_id = ws.id
     r0, r1   = row_idx - 1, row_idx  # índices 0-based da linha recém-adicionada
     n_cols   = len(headers)
 
-    requests = [_cell_request(sheet_id, r0, r1, 0, n_cols, _WHITE)]  # reseta antes de recolorir
+    requests = [_reset_format_request(sheet_id, r0, r1, 0, n_cols)]  # reseta antes de recolorir
     for col in (credito_cols or []):
         requests.append(_cell_request(sheet_id, r0, r1, col, col + 1, _CREDITO_VERDE))
     for col in (debito_cols or []):
@@ -354,14 +380,14 @@ def write_dashboard(ws: gspread.Worksheet, kpis: list[dict]) -> None:
     ws.clear()
 
     # Cabeçalho da tabela de KPIs
-    ws.update("A1:B1", [["Indicador", "Valor"]], value_input_option="USER_ENTERED")
+    ws.update("A1:B1", [["Indicador", "Valor"]], value_input_option="RAW")
 
     rows = [[kpi["label"], kpi["value"]] for kpi in kpis]
     if rows:
         ws.update(
             range_name=f"A2:B{1 + len(rows)}",
             values=rows,
-            value_input_option="USER_ENTERED",
+            value_input_option="RAW",
         )
 
     # Formatar cabeçalho

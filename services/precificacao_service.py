@@ -7,7 +7,10 @@ Lógica:
   - IPI é sempre ADICIONADO ao custo (aumenta o custo de compra)
   - ICMS, PIS e COFINS nas compras geram CRÉDITO (reduzem custo líquido)
   - ICMS, PIS e COFINS nas vendas são DÉBITOS sobre a receita
-  - Margem líquida = Receita − Encargos ML − Débitos fiscais venda − Custo + Créditos compra
+  - Comissão ML + frete de venda também geram CRÉDITO de PIS/COFINS (confirmado
+    com a contadora em 12/06/2026 — despesa de venda no Lucro Real)
+  - Margem líquida = Receita − Encargos ML − Débitos fiscais venda − Custo
+                      + Créditos compra + Créditos PIS/COFINS s/ comissão+frete
 
 Uso:
     from services.precificacao_service import calcular_linha, HEADERS_PRECIFICACAO
@@ -42,38 +45,33 @@ HEADERS_PRECIFICACAO = [
     "PIS Venda (R$)",                # K  10
     "COFINS Venda (R$)",             # L  11
     "Comissão + Frete ML (R$)",      # M  12
-    "Custo NF c/ IPI (R$)",          # N  13
-    "ICMS Compra — crédito (R$)",    # O  14
-    "PIS Compra — crédito (R$)",     # P  15
-    "COFINS Compra — crédito (R$)",  # Q  16
-    "Imposto Recuperável (R$)",      # R  17
-    "Margem Líquida (R$)",           # S  18
-    "Margem Líquida (%)",            # T  19  ← usado para coloração
-    "Status Anúncio",                # U  20
-    "Última Atualização",            # V  21
+    "PIS Crédito s/ Comissão+Frete (R$)",    # N  13 — confirmado com a contadora (12/06/2026)
+    "COFINS Crédito s/ Comissão+Frete (R$)", # O  14 — idem
+    "Custo NF c/ IPI (R$)",          # P  15
+    "ICMS Compra — crédito (R$)",    # Q  16
+    "PIS Compra — crédito (R$)",     # R  17
+    "COFINS Compra — crédito (R$)",  # S  18
+    "Imposto Recuperável (R$)",      # T  19
+    "Margem Líquida (R$)",           # U  20
+    "Margem Líquida (%)",            # V  21  ← usado para coloração
+    "Status Anúncio",                # W  22
+    "Última Atualização",            # X  23
 ]
 
 # Índice da coluna Margem Líquida (%) — usado pelo client.py para coloração
-MARGEM_PCT_COL_INDEX = 19
+MARGEM_PCT_COL_INDEX = 21
 
 # Colunas para coloração fixa (independente da margem), usadas pelo client.py:
 #   crédito — valores que BENEFICIAM a margem (créditos fiscais + bônus RT) → verde claro
 #   débito  — valores que REDUZEM a margem (encargos de venda e custo)      → vermelho claro
 #   margem  — R$ e % da margem líquida, coloridas pelo desempenho          → cor por faixa
-CREDITO_COLS = [7, 14, 15, 16, 17]              # RT (bônus Meli) + ICMS/PIS/COFINS crédito + Imposto Recuperável
-DEBITO_COLS  = [8, 9, 10, 11, 12, 13]            # Frete, ICMS/PIS/COFINS venda, Comissão+Frete, Custo NF
-MARGEM_COLS  = [18, MARGEM_PCT_COL_INDEX]        # Margem Líquida (R$) e (%)
+CREDITO_COLS = [7, 13, 14, 16, 17, 18, 19]  # RT, PIS/COFINS créd. s/ comissão+frete, ICMS/PIS/COFINS créd. compra, Imposto Recuperável
+DEBITO_COLS  = [8, 9, 10, 11, 12, 15]        # Frete, ICMS/PIS/COFINS venda, Comissão+Frete, Custo NF
+MARGEM_COLS  = [20, MARGEM_PCT_COL_INDEX]    # Margem Líquida (R$) e (%)
 
-# Status Anúncio (U) — vira dropdown + cor fixa por valor (ver client.py)
-STATUS_COL_INDEX = 20
+# Status Anúncio (W) — vira dropdown + cor fixa por valor (ver client.py)
+STATUS_COL_INDEX = 22
 STATUS_OPTIONS    = ["Ativo", "Pausado", "Fechado", "Migrado", "—"]
-
-# TODO (confirmado com a contadora em 12/06/2026): comissão ML + frete de venda
-# são despesas que geram crédito de PIS/COFINS (1,65%/7,6%) no Lucro Real, igual
-# ao custo de compra. AINDA NÃO IMPLEMENTADO aqui — decisão foi manter a coluna M
-# só como débito por ora. Quando for implementado, esse crédito deve ENTRAR
-# COMO CRÉDITO POSITIVO na margem (some ao Imposto Recuperável ou coluna própria),
-# nunca como redução do débito existente.
 
 
 def _r(v: float, dec: int = 2) -> float:
@@ -135,6 +133,12 @@ def calcular_linha(
     pis_venda    = _r(base_pis_cofins * PIS_VENDA)
     cofins_venda = _r(base_pis_cofins * COFINS_VENDA)
 
+    # Crédito de PIS/COFINS sobre comissão+frete — confirmado com a contadora
+    # (12/06/2026): despesas de venda (comissão de intermediação + frete na
+    # operação de venda) geram crédito no Lucro Real, mesma alíquota da venda.
+    credito_pis_com_frete    = _r(comissao_frete * PIS_VENDA)
+    credito_cofins_com_frete = _r(comissao_frete * COFINS_VENDA)
+
     # Custo de compra e créditos fiscais
     if custo_data:
         custo_nf        = _r(custo_data.custo_com_ipi)
@@ -158,6 +162,8 @@ def calcular_linha(
         - cofins_venda
         - custo_nf
         + imp_recuperavel
+        + credito_pis_com_frete
+        + credito_cofins_com_frete
     )
     margem_pct = _r(margem_R / preco * 100, 2) if preco else 0.0
 
@@ -175,15 +181,17 @@ def calcular_linha(
         _r(pis_venda),      # K
         _r(cofins_venda),   # L
         _r(comissao_frete), # M
-        _r(custo_nf),       # N
-        _r(icms_credito),   # O
-        _r(pis_credito),    # P
-        _r(cofins_credito), # Q
-        _r(imp_recuperavel),# R
-        _r(margem_R),       # S
-        _r(margem_pct, 2),  # T — usado para coloração de linha
-        _status_br(status), # U
-        timestamp,          # V
+        _r(credito_pis_com_frete),    # N
+        _r(credito_cofins_com_frete), # O
+        _r(custo_nf),       # P
+        _r(icms_credito),   # Q
+        _r(pis_credito),    # R
+        _r(cofins_credito), # S
+        _r(imp_recuperavel),# T
+        _r(margem_R),       # U
+        _r(margem_pct, 2),  # V — usado para coloração de linha
+        _status_br(status), # W
+        timestamp,          # X
     ]
 
     uncertain_cols = []
@@ -192,12 +200,16 @@ def calcular_linha(
     if ml_data and ml_data.get("fees_incerto"):
         uncertain_cols.append(6)   # G — Taxa ML (%): fallback, não confirmada pela API
         uncertain_cols.append(12)  # M — Comissão + Frete ML (R$): depende da taxa acima
+        uncertain_cols.append(13)  # N — PIS crédito s/ comissão+frete: depende da taxa acima
+        uncertain_cols.append(14)  # O — COFINS crédito s/ comissão+frete: depende da taxa acima
     if ml_data and ml_data.get("rt_incerto"):
         uncertain_cols.append(7)   # H — RT (R$): estimado a partir de percentual arredondado pela API
     if ml_data and ml_data.get("frete_incerto"):
         uncertain_cols.append(8)   # I — Frete (R$): falha ao consultar shipping_options/free
         uncertain_cols.append(12)  # M — Comissão + Frete ML (R$): depende do frete acima
+        uncertain_cols.append(13)  # N — PIS crédito s/ comissão+frete: depende do frete acima
+        uncertain_cols.append(14)  # O — COFINS crédito s/ comissão+frete: depende do frete acima
     if custo_data is None:
-        uncertain_cols.append(13)  # N — Custo NF c/ IPI (R$): sem NF encontrada, custo = 0
+        uncertain_cols.append(15)  # P — Custo NF c/ IPI (R$): sem NF encontrada, custo = 0
 
     return row, uncertain_cols

@@ -44,36 +44,32 @@ const HEADERS_PREC = [
   'PIS Venda (R$)',                // K  10
   'COFINS Venda (R$)',             // L  11
   'Comissão + Frete ML (R$)',      // M  12
-  'Custo NF c/ IPI (R$)',          // N  13
-  'ICMS Compra — crédito (R$)',    // O  14
-  'PIS Compra — crédito (R$)',     // P  15
-  'COFINS Compra — crédito (R$)',  // Q  16
-  'Imposto Recuperável (R$)',      // R  17
-  'Margem Líquida (R$)',           // S  18
-  'Margem Líquida (%)',            // T  19  ← usada para coloração
-  'Status Anúncio',                // U  20
-  'Última Atualização',            // V  21
+  'PIS Crédito s/ Comissão+Frete (R$)',    // N  13 — confirmado com a contadora (12/06/2026)
+  'COFINS Crédito s/ Comissão+Frete (R$)', // O  14 — idem
+  'Custo NF c/ IPI (R$)',          // P  15
+  'ICMS Compra — crédito (R$)',    // Q  16
+  'PIS Compra — crédito (R$)',     // R  17
+  'COFINS Compra — crédito (R$)',  // S  18
+  'Imposto Recuperável (R$)',      // T  19
+  'Margem Líquida (R$)',           // U  20
+  'Margem Líquida (%)',            // V  21  ← usada para coloração
+  'Status Anúncio',                // W  22
+  'Última Atualização',            // X  23
 ];
 
-const MARGEM_COL_IDX = 19; // índice 0-based da coluna Margem %
+const MARGEM_COL_IDX = 21; // índice 0-based da coluna Margem %
 
 // Coloração fixa (independente da margem):
 //   crédito — valores que beneficiam a margem (créditos fiscais + bônus RT) → verde claro
 //   débito  — valores que reduzem a margem (encargos de venda e custo)     → vermelho claro
 //   margem  — R$ e % da margem líquida, coloridos pela faixa de desempenho
-const CREDITO_COLS = [7, 14, 15, 16, 17];  // RT + ICMS/PIS/COFINS crédito + Imposto Recuperável
-const DEBITO_COLS  = [8, 9, 10, 11, 12, 13]; // Frete, ICMS/PIS/COFINS venda, Comissão+Frete, Custo NF
-const MARGEM_COLS  = [18, MARGEM_COL_IDX];   // Margem Líquida (R$) e (%)
+const CREDITO_COLS = [7, 13, 14, 16, 17, 18, 19]; // RT, PIS/COFINS créd. s/ comissão+frete, ICMS/PIS/COFINS créd. compra, Imposto Recuperável
+const DEBITO_COLS  = [8, 9, 10, 11, 12, 15];        // Frete, ICMS/PIS/COFINS venda, Comissão+Frete, Custo NF
+const MARGEM_COLS  = [20, MARGEM_COL_IDX];          // Margem Líquida (R$) e (%)
 
-// Status Anúncio (U) — dropdown + cor fixa por valor
-const STATUS_COL_IDX = 20;
+// Status Anúncio (W) — dropdown + cor fixa por valor
+const STATUS_COL_IDX = 22;
 const STATUS_OPTIONS = ['Ativo', 'Pausado', 'Fechado', 'Migrado', '—'];
-
-// TODO (confirmado com a contadora em 12/06/2026): comissão ML + frete de venda
-// são despesas que geram crédito de PIS/COFINS (1,65%/7,6%) no Lucro Real, igual
-// ao custo de compra. AINDA NÃO IMPLEMENTADO aqui — decisão foi manter a coluna M
-// só como débito por ora. Quando for implementado, esse crédito deve ENTRAR
-// COMO CRÉDITO POSITIVO na margem, nunca como redução do débito existente.
 
 // Abas auxiliares
 const ABA_ALERTAS = 'Alertas';

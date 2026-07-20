@@ -29,7 +29,7 @@ from connectors.mercadolivre.orders import get_item_fees, get_taxa_bonus, get_fr
 from services.custo_service import load_cache
 
 # ── Constantes Lucro Real (espelham 01_Config.gs) ─────────────────────────────
-ICMS_VENDA   = 0.12
+ICMS_VENDA   = 0.18
 PIS_VENDA    = 0.0165
 COFINS_VENDA = 0.076
 
@@ -195,7 +195,7 @@ def calcular_margem(ml_data: dict, fees: dict, custo, preco_praticado: float,
     print(f"  (-) Comissao ML         : {_brl(taxa_rs)}  ({_pct(taxa_pct).strip()})")
     print(f"  (+) RT (bonus Meli)     : {_brl(rt_valor)}")
     print(f"  (-) Frete ML            : {_brl(frete_rs)}")
-    print(f"  (-) ICMS venda          : {_brl(icms_venda)}  (12%)")
+    print(f"  (-) ICMS venda          : {_brl(icms_venda)}  (18%)")
     print(f"  (-) PIS venda           : {_brl(pis_venda)}  (1,65%)")
     print(f"  (-) COFINS venda        : {_brl(cofins_venda)}  (7,6%)")
     print(f"  (-) Custo NF c/ IPI     : {_brl(custo_nf)}")

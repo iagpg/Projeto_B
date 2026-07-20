@@ -80,7 +80,26 @@ def ml_get(url: str, params: dict | None = None, *, _retry: bool = True):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-_ATTRS = "id,status,tags,item_group_id,catalog_product_id,title,seller_sku"
+_ATTRS = "id,status,tags,item_group_id,catalog_product_id,title,seller_sku,attributes"
+
+
+def extract_seller_sku(item: dict) -> str:
+    """
+    O ML guarda o SKU em dois lugares possíveis:
+      - campo direto 'seller_sku' (legado, nem sempre preenchido)
+      - dentro de attributes[] com id 'SELLER_SKU' (ficha técnica do anúncio)
+    Retorna o primeiro valor não vazio encontrado.
+    """
+    direct = str(item.get("seller_sku") or "").strip()
+    if direct:
+        return direct
+    for attr in item.get("attributes") or []:
+        if attr.get("id") == "SELLER_SKU":
+            val = attr.get("value_name") or ""
+            if not val and attr.get("values"):
+                val = attr["values"][0].get("name") or ""
+            return str(val).strip()
+    return ""
 
 
 def get_item(item_id: str) -> dict:
@@ -190,7 +209,7 @@ def _build_result(raw: dict) -> MLResult:
     r.item_id            = raw.get("id", "")
     r.status             = raw.get("status", "")
     r.title              = raw.get("title", "")
-    r.seller_sku         = raw.get("seller_sku", "")
+    r.seller_sku         = extract_seller_sku(raw)
     r.tags               = raw.get("tags") or []
     r.item_group_id      = raw.get("item_group_id") or ""
     r.catalog_product_id = raw.get("catalog_product_id") or ""

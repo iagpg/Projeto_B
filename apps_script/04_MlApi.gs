@@ -4,6 +4,23 @@
 
 const ML_USER_ID_PROP = () => getProps().getProperty('ML_USER_ID') || '1180812007';
 
+// O ML guarda o SKU em dois lugares: campo direto 'seller_sku' (legado, nem
+// sempre preenchido) ou dentro de attributes[] com id 'SELLER_SKU' (ficha
+// técnica do anúncio). Verifica os dois.
+function extrairSellerSku(item) {
+  const direto = String(item.seller_sku || '').trim();
+  if (direto) return direto;
+  const attrs = item.attributes || [];
+  for (const attr of attrs) {
+    if (attr.id === 'SELLER_SKU') {
+      let val = attr.value_name || '';
+      if (!val && attr.values && attr.values.length) val = attr.values[0].name || '';
+      return String(val).trim();
+    }
+  }
+  return '';
+}
+
 // ── Mapa SKU → dados do anúncio ───────────────────────────────────────────────
 
 // Pagina TODOS os anúncios do vendedor e retorna dict SKU → {mlbId, price, status, categoryId, title}
@@ -27,9 +44,9 @@ function buildSkuMlbMap() {
   const skuMap = {};
   for (let i = 0; i < allIds.length; i += 20) {
     const chunk = allIds.slice(i, i + 20);
-    const items = mlGetBatch(chunk, 'id,title,price,status,category_id,seller_sku');
+    const items = mlGetBatch(chunk, 'id,title,price,status,category_id,seller_sku,attributes');
     items.forEach(item => {
-      const sku = String(item.seller_sku || '').trim();
+      const sku = extrairSellerSku(item);
       if (sku) {
         skuMap[sku] = {
           mlbId:      item.id,

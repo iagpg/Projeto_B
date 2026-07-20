@@ -198,7 +198,7 @@ def build_sku_cost_map(months_back: int = 12,
 
     if verbose:
         modo = f"incremental (since_nf_id={since_nf_id})" if since_nf_id else "completo"
-        print(f"  Buscando NFs de entrada [{modo}]: {data_inicio} → {data_fim}")
+        print(f"  Buscando NFs de entrada [{modo}]: {data_inicio} -> {data_fim}")
 
     # ── Fase 1: listar todas as NFs de entrada ──────────────────
     nf_headers = []

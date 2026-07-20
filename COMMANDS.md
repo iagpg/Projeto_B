@@ -316,6 +316,31 @@ python scripts/sincronizar_custo.py --info
 
 ---
 
+### `exportar_cache_nf_excel.py`
+Exporta `cache/nf_custo.json` para uma planilha Excel legível, com formatação
+em R$, cabeçalho colorido, filtro automático e coluna congelada.
+
+```bash
+python scripts/exportar_cache_nf_excel.py
+```
+
+**Saída:** `output/cache_nf.xlsx`
+
+---
+
+### `probe_precificacao.py`
+Testa o fluxo completo de precificação de um produto: cache NF → anúncio ML
+(com seller_sku via campo direto ou attributes) → taxas ML → cálculo de
+margem Lucro Real. Útil para diagnosticar por que um produto não aparece
+corretamente na aba Precificação.
+
+```bash
+python scripts/probe_precificacao.py MLB3633227036 AM27
+python scripts/probe_precificacao.py --sku AM27
+```
+
+---
+
 ### `probe_tiny_nf.py`
 Diagnóstico da API Tiny v3 para Notas Fiscais.
 Exibe a estrutura bruta da resposta para verificar nomes de campos.

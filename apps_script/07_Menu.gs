@@ -21,6 +21,11 @@ function onOpen() {
         .addItem('Testar Conexão Tiny',  'testarConexaoTiny')
         .addItem('Testar Vendas ML',     'testarVendasML')
     )
+    .addSubMenu(
+      SpreadsheetApp.getUi().createMenu('🔐 Autorização OAuth (rodar 1x, ou se o token for revogado)')
+        .addItem('Autorizar Mercado Livre', 'autorizarML')
+        .addItem('Autorizar Tiny ERP',       'autorizarTiny')
+    )
     .addSeparator()
     .addItem('⚙️ Inicializar Configurações', 'inicializarConfiguracoes')
     .addItem('🔑 Instalar Trigger Diário',   'instalarTriggerDiario')

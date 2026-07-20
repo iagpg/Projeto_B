@@ -6,8 +6,16 @@ const ML_BASE    = 'https://api.mercadolibre.com';
 const TINY_BASE  = 'https://erp.tiny.com.br/public-api/v3';
 const TINY_TOKEN_URL = 'https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/token';
 
+// OAuth2 — autorização inicial (roda direto no Apps Script, sem depender do Python).
+// Mesmos redirect_uri já cadastrados nos apps ML/Tiny (usados pelo fluxo Python
+// historicamente) — nenhuma configuração externa adicional é necessária.
+const ML_AUTH_URL       = 'https://auth.mercadolivre.com.br/authorization';
+const ML_REDIRECT_URI   = 'https://bouwobraequipamentos.com.br/';
+const TINY_AUTH_URL     = 'https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/auth';
+const TINY_REDIRECT_URI = 'http://localhost:8080/callback';
+
 // Regime Lucro Real
-const ICMS_VENDA   = 0.12;
+const ICMS_VENDA   = 0.18;
 const PIS_VENDA    = 0.0165;
 const COFINS_VENDA = 0.076;
 const PIS_COMPRA   = 0.0165;

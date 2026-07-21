@@ -196,6 +196,20 @@ function _processarNfHeaders(nfHeaders, ss) {
   return costMap;
 }
 
+// Normaliza uma data pra "YYYY-MM-DD" em texto puro. Aceita tanto o formato
+// já limpo quanto um objeto Date (ou o texto longo que String(dateObj) produz,
+// tipo "Fri Jul 25 2025 00:00:00 GMT-0300..."), pra desfazer a corrupção
+// descrita acima quando encontrada.
+function _normalizarDataISO(v) {
+  if (!v) return '';
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s; // não deu pra interpretar, devolve como veio
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dia = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dia}`;
+}
+
 // Grava o costMap na aba Cache NF.
 // merge=false: substitui a aba inteira (sync padrão de 12 meses).
 // merge=true: mescla com o que já existe, mantendo por SKU a NF com nfData
@@ -211,10 +225,12 @@ function _gravarCacheNF(costMap, merge) {
 
   let final = costMap;
   if (merge) {
-    final = lerCacheNF(); // {sku: {custoBase,...,nfNumero,nfData}}
+    final = lerCacheNF(); // {sku: {custoBase,...,nfNumero,nfData}} — nfData já normalizada
     Object.entries(costMap).forEach(([sku, novo]) => {
       const atual = final[sku];
-      if (!atual || String(novo.nfData) >= String(atual.nfData || '')) {
+      const dataNova  = _normalizarDataISO(novo.nfData);
+      const dataAtual = atual ? _normalizarDataISO(atual.nfData) : '';
+      if (!atual || dataNova >= dataAtual) {
         final[sku] = novo;
       }
     });
@@ -223,12 +239,19 @@ function _gravarCacheNF(costMap, merge) {
   const agora = new Date().toLocaleString('pt-BR');
   const rows = Object.entries(final).map(([sku, d]) => [
     sku, d.custoBase, d.ipiValor, d.icmsCredito, d.pisCredito, d.cofinsCredito,
-    d.nfNumero, d.nfData, agora,
+    d.nfNumero, _normalizarDataISO(d.nfData), agora,
   ]);
 
   ws.clearContents();
   ws.getRange(1, 1, 1, HEADERS_CACHE_NF.length).setValues([HEADERS_CACHE_NF]);
   if (rows.length) {
+    // Força texto nas colunas que o Sheets tende a reinterpretar como número/data
+    // (SKU com zero à esquerda, número da NF, data da NF) ANTES de escrever —
+    // sem isso "2026-06-25" vira uma data de verdade e "059467" perde o zero à
+    // esquerda, do mesmo jeito que já corrigimos no lado Python (RAW em vez de
+    // USER_ENTERED).
+    ws.getRange(2, 1, rows.length, 1).setNumberFormat('@');   // SKU
+    ws.getRange(2, 7, rows.length, 2).setNumberFormat('@');   // NF Número, NF Data
     ws.getRange(2, 1, rows.length, HEADERS_CACHE_NF.length).setValues(rows);
   }
 
@@ -333,7 +356,7 @@ function lerCacheNF() {
       pisCredito:    parseFloat(row[4]) || 0,
       cofinsCredito: parseFloat(row[5]) || 0,
       nfNumero:      String(row[6]),
-      nfData:        String(row[7]),
+      nfData:        _normalizarDataISO(row[7]),
     };
   });
   return map;

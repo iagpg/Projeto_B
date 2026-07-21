@@ -203,3 +203,15 @@ function tinyGetItensParalelo(pairs) {
   }));
   return _fetchAllComRetry429(requests);
 }
+
+// Busca múltiplos produtos em paralelo (fetchAll) — GET /produtos/{id}
+function tinyGetProdutosParalelo(ids) {
+  const p = getProps();
+  const token = p.getProperty('TINY_ACCESS_TOKEN');
+  const requests = ids.map(id => ({
+    url: `${TINY_BASE}/produtos/${id}`,
+    headers: { 'Authorization': 'Bearer ' + token },
+    muteHttpExceptions: true,
+  }));
+  return _fetchAllComRetry429(requests);
+}

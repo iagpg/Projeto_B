@@ -28,30 +28,30 @@ function extrairSkuTiny(produto) {
   return String(produto.codigo || produto.sku || produto.code || '').trim();
 }
 
-// Mapa idProduto (ID interno Tiny) -> SKU atual, escaneando TODO o catálogo
-// (sem filtro de situação — um item de NF antiga pode referenciar um produto
-// já descontinuado). Usado porque o "codigo" de um item de NF pode ser o
-// código usado na nota (às vezes do fornecedor), diferente do SKU atual do
-// produto no Tiny. Exemplo real: NF 213583, item código "WPSRESENOINP46" ->
+// Resolve idProduto (ID interno Tiny) -> SKU atual, só para os IDs citados nas
+// NFs da busca atual — GET /produtos/{id} direto, em lotes paralelos, sem
+// varrer o catálogo inteiro. Usado porque o "codigo" de um item de NF pode
+// ser o código usado na nota (às vezes do fornecedor), diferente do SKU atual
+// do produto no Tiny. Exemplo real: NF 213583, item código "WPSRESENOINP46" ->
 // idProduto 991633087 -> produto atual tem sku "10034034168445".
-function _construirMapaIdProdutoSku() {
+// Mesma lógica do lado Python (connectors/tiny/nf.py::_resolve_id_produto_sku).
+function _resolverIdProdutoSku(idProdutosSet, ss) {
+  const ids = Array.from(idProdutosSet).filter(Boolean);
+  if (!ids.length) return {};
+  if (ss) ss.toast(`Resolvendo ${ids.length} produto(s) (idProduto -> SKU)...`, 'BouwObra', -1);
+
   const mapa = {};
-  let offset = 0;
-  while (true) {
-    const data = tinyGet('/produtos', { offset: offset, limit: 100 });
-    const inner = (data.data) || data;
-    const itens = inner.itens || inner.produtos || inner.items || (Array.isArray(inner) ? inner : []);
-    if (!itens.length) break;
-    itens.forEach(p => {
-      const id = parseInt(p.id || 0, 10);
-      const sku = extrairSkuTiny(p);
-      if (id && sku) mapa[id] = sku;
+  const BATCH = 30;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const loteIds = ids.slice(i, i + BATCH);
+    const respostas = tinyGetProdutosParalelo(loteIds);
+    respostas.forEach((resp, j) => {
+      if (!resp) return;
+      const produto = resp.data || resp;
+      const sku = extrairSkuTiny(produto);
+      if (sku) mapa[loteIds[j]] = sku;
     });
-    const pag = inner.paginacao || inner.pagination || {};
-    const total = parseInt(pag.total || 0, 10);
-    offset += 100;
-    if ((total && offset >= total) || itens.length < 100) break;
-    Utilities.sleep(150);
+    if (i + BATCH < ids.length) Utilities.sleep(100);
   }
   return mapa;
 }
@@ -149,16 +149,21 @@ function _listarNfIds(mesesAtras, dataInicioCustom, dataFimCustom, numeroCustom)
 
 // ── Build do Cache de Custos ───────────────────────────────────────────────────
 
-// Busca detalhes + impostos por item em lotes pra uma lista de headers de NF
+// Busca detalhes + impostos por item pra uma lista de headers de NF
 // {id, numero, data}. Reutilizado pelo sync padrão (12 meses) e pela busca por
 // período/NF específica.
+//
+// Estrutura em fases (mesmo padrão do lado Python em connectors/tiny/nf.py):
+// busca TUDO primeiro (detalhes das NFs, depois idProduto->SKU, depois
+// impostos dos itens) e só no final faz o cálculo, em memória, sem nenhuma
+// chamada de API na etapa de cálculo. Evita alternar 1 chamada/1 cálculo, que
+// é o que facilita estourar o rate limit do Tiny.
 function _processarNfHeaders(nfHeaders, ss) {
-  if (ss) ss.toast('Mapeando idProduto -> SKU atual...', 'BouwObra', -1);
-  const idProdutoSku = _construirMapaIdProdutoSku();
-
-  // Fase 1: buscar detalhes das NFs para extrair lista de itens
-  const pendingItems = []; // {nfId, nfNumero, nfData, idItem, sku, qty, unit, descricao}
   const BATCH = 30;
+
+  // ── Fase 1: buscar o detalhe de TODAS as NFs ────────────────────────────────
+  if (ss) ss.toast(`Buscando detalhes de ${nfHeaders.length} NF(s)...`, 'BouwObra', -1);
+  const itensPorNf = {}; // nfId -> itens[] (crus, da resposta da API)
 
   for (let i = 0; i < nfHeaders.length; i += BATCH) {
     const lote = nfHeaders.slice(i, i + BATCH);
@@ -169,64 +174,75 @@ function _processarNfHeaders(nfHeaders, ss) {
       const nfHdr = lote[j];
       const inner = resp.data || resp;
       const nota  = inner.nota || inner;
-      const itens = nota.itens || nota.items || nota.produtos || [];
-
-      itens.forEach(item => {
-        // O "codigo" do item pode ser o código usado na nota (às vezes do
-        // fornecedor), diferente do SKU atual do produto — idProduto é estável
-        // e sempre aponta pro produto certo (ver _construirMapaIdProdutoSku).
-        const idProduto = parseInt(item.idProduto || 0, 10);
-        const sku = idProdutoSku[idProduto] || String(item.codigo || '').trim();
-        if (!sku) return;
-        const idItem   = parseInt(item.idItem || item.id || 0, 10);
-        const qty      = parseFloat(item.quantidade || 1) || 1;
-        const unit     = parseFloat(item.valorUnitario || 0);
-        const descricao = String(item.descricao || '').trim();
-        if (unit <= 0) return;
-        pendingItems.push({ nfId: nfHdr.id, nfNumero: nfHdr.numero, nfData: nfHdr.data,
-                            idItem, sku, qty, unit, descricao });
-      });
+      itensPorNf[nfHdr.id] = nota.itens || nota.items || nota.produtos || [];
     });
-    Utilities.sleep(100);
+    if (i + BATCH < nfHeaders.length) Utilities.sleep(100);
   }
+
+  // ── Fase 2: resolver idProduto -> SKU só p/ os IDs citados nestas NFs ───────
+  const idProdutosCitados = new Set();
+  Object.values(itensPorNf).forEach(itens => {
+    itens.forEach(item => {
+      const id = parseInt(item.idProduto || 0, 10);
+      if (id) idProdutosCitados.add(id);
+    });
+  });
+  const idProdutoSku = _resolverIdProdutoSku(idProdutosCitados, ss);
+
+  // ── Fase 3: montar a lista de itens pendentes (ainda sem impostos) ─────────
+  const pendingItems = []; // {nfId, nfNumero, nfData, idItem, sku, qty, unit, descricao}
+  nfHeaders.forEach(nfHdr => {
+    const itens = itensPorNf[nfHdr.id] || [];
+    itens.forEach(item => {
+      // O "codigo" do item pode ser o código usado na nota (às vezes do
+      // fornecedor), diferente do SKU atual do produto — idProduto é estável
+      // e sempre aponta pro produto certo (ver _resolverIdProdutoSku).
+      const idProduto = parseInt(item.idProduto || 0, 10);
+      const sku = idProdutoSku[idProduto] || String(item.codigo || '').trim();
+      if (!sku) return;
+      const idItem   = parseInt(item.idItem || item.id || 0, 10);
+      const qty      = parseFloat(item.quantidade || 1) || 1;
+      const unit     = parseFloat(item.valorUnitario || 0);
+      const descricao = String(item.descricao || '').trim();
+      if (unit <= 0) return;
+      pendingItems.push({ nfId: nfHdr.id, nfNumero: nfHdr.numero, nfData: nfHdr.data,
+                          idItem, sku, qty, unit, descricao });
+    });
+  });
 
   if (ss) ss.toast(`${pendingItems.length} itens. Buscando impostos...`, 'BouwObra', -1);
 
-  // Fase 2: buscar impostos por item (GET /notas/{nfId}/itens/{idItem}) em lotes
-  const costMap = {}; // sku → custo com valores absolutos
-  const _impVal = obj => (obj && typeof obj === 'object') ? (parseFloat(obj.valorImposto || obj.valor || 0) || 0) : 0;
-  const _rnd4   = v => Math.round(v * 10000) / 10000;
+  // ── Fase 4: buscar os impostos de TODOS os itens ────────────────────────────
   const validPairs = pendingItems.filter(it => it.idItem > 0);
+  const impostosPorPar = {}; // "nfId:idItem" -> resposta de impostos
 
   for (let i = 0; i < validPairs.length; i += BATCH) {
     const lote = validPairs.slice(i, i + BATCH);
     const respostas = tinyGetItensParalelo(lote.map(it => ({ nfId: it.nfId, idItem: it.idItem })));
-
     respostas.forEach((resp, j) => {
       const it = lote[j];
-      if (costMap[it.sku]) return; // mantém NF mais recente
-      const taxes = resp || {};
-      costMap[it.sku] = {
-        custoBase:     _rnd4(it.unit),
-        ipiValor:      _rnd4(_impVal(taxes.ipi)    / it.qty),
-        icmsCredito:   _rnd4(_impVal(taxes.icms)   / it.qty),
-        pisCredito:    _rnd4(_impVal(taxes.pis)     / it.qty),
-        cofinsCredito: _rnd4(_impVal(taxes.cofins)  / it.qty),
-        nfNumero:      it.nfNumero,
-        nfData:        it.nfData,
-        descricao:     it.descricao,
-      };
+      impostosPorPar[`${it.nfId}:${it.idItem}`] = resp || {};
     });
-    Utilities.sleep(100);
+    if (i + BATCH < validPairs.length) Utilities.sleep(100);
   }
 
-  // Itens sem idItem: registra custo base sem impostos detalhados
-  pendingItems.filter(it => it.idItem === 0).forEach(it => {
-    if (costMap[it.sku]) return;
+  // ── Fase 5: cálculo final — puro em memória, nenhuma chamada de API aqui ───
+  const costMap = {}; // sku → custo com valores absolutos
+  const _impVal = obj => (obj && typeof obj === 'object') ? (parseFloat(obj.valorImposto || obj.valor || 0) || 0) : 0;
+  const _rnd4   = v => Math.round(v * 10000) / 10000;
+
+  pendingItems.forEach(it => {
+    if (costMap[it.sku]) return; // mantém a NF mais recente por SKU (primeira encontrada)
+    const taxes = it.idItem > 0 ? (impostosPorPar[`${it.nfId}:${it.idItem}`] || {}) : {};
     costMap[it.sku] = {
-      custoBase: _rnd4(it.unit), ipiValor: 0, icmsCredito: 0,
-      pisCredito: 0, cofinsCredito: 0,
-      nfNumero: it.nfNumero, nfData: it.nfData, descricao: it.descricao,
+      custoBase:     _rnd4(it.unit),
+      ipiValor:      _rnd4(_impVal(taxes.ipi)     / it.qty),
+      icmsCredito:   _rnd4(_impVal(taxes.icms)    / it.qty),
+      pisCredito:    _rnd4(_impVal(taxes.pis)     / it.qty),
+      cofinsCredito: _rnd4(_impVal(taxes.cofins)  / it.qty),
+      nfNumero:      it.nfNumero,
+      nfData:        it.nfData,
+      descricao:     it.descricao,
     };
   });
 

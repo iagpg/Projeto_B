@@ -73,6 +73,18 @@ const STATUS_OPTIONS = ['Ativo', 'Pausado', 'Fechado', 'Migrado', '—'];
 
 // Abas auxiliares
 const ABA_ALERTAS = 'Alertas';
+const ABA_SIMULACAO_PRECO = 'Simulação Preço'; // aba oculta
+
+// Cabeçalhos da Simulação de Preço — editar a coluna F (Preço Praticado) na
+// Precificação grava aqui o preço original (1x) e o preço simulado, pra
+// sobreviver a uma re-sincronização completa (que reescreve a aba inteira) e
+// permitir reverter pro preço real do ML.
+const HEADERS_SIMULACAO_PRECO = [
+  'SKU',                 // A 0
+  'Preço Original (R$)', // B 1
+  'Preço Simulado (R$)', // C 2
+  'Ativado em',          // D 3
+];
 
 // Cabeçalhos do Cache NF — 9 colunas com valores absolutos (R$)
 const HEADERS_CACHE_NF = [

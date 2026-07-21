@@ -107,8 +107,18 @@ function _r2(v) { return Math.round(v * 100) / 100; }
 // Busca preço praticado (promoção), taxa ML, RT e frete real de um anúncio —
 // reutilizado tanto pela sincronização completa quanto pela adição manual
 // (09_AdicionarAnuncio.gs).
-function montarMlDataCompleto(mlbId, title, status, categoryId, listingTypeId, price) {
+//
+// precoOverride (opcional): substitui o preço praticado real do ML por um
+// valor simulado manualmente (ver "Simulação de Preço" abaixo) — taxa ML e RT
+// são recalculados com base nesse preço simulado, pra manter a margem
+// coerente com o cenário hipotético.
+function montarMlDataCompleto(mlbId, title, status, categoryId, listingTypeId, price, precoOverride) {
   const promo = getPrecoPraticado(mlbId, price);
+  if (precoOverride != null && precoOverride > 0) {
+    promo.precoPraticado = precoOverride;
+    promo.promoAtiva = true;
+    promo.incerto = false;
+  }
   const fees  = getMlItemFees(promo.precoPraticado, categoryId, listingTypeId);
   const bonus = getTaxaBonus(mlbId, price, promo.precoPraticado);
   const frete = getFreteEnvio(mlbId);
@@ -140,6 +150,7 @@ function atualizarPrecificacao() {
   // 2. Mapeia SKU → dados do anúncio ML
   const skuMlbMap = buildSkuMlbMap();
   const nMl = Object.keys(skuMlbMap).length;
+  const simulacoes = lerSimulacoesPreco(); // SKUs com preço praticado simulado manualmente
   ss.toast(`${nMl} anúncios ML mapeados. Calculando taxas e margens...`, 'BouwObra', -1);
 
   // 3. Une os conjuntos de SKUs (ML + Cache NF)
@@ -151,9 +162,10 @@ function atualizarPrecificacao() {
   allSkus.forEach(sku => {
     const mlData    = skuMlbMap[sku] || null;
     const custoData = cacheNF[sku]   || null;
+    const precoOverride = simulacoes[sku] ? simulacoes[sku].precoSimulado : null;
 
     const mlDataCompleto = mlData
-      ? montarMlDataCompleto(mlData.mlbId, mlData.title, mlData.status, mlData.categoryId, mlData.listingTypeId, mlData.price)
+      ? montarMlDataCompleto(mlData.mlbId, mlData.title, mlData.status, mlData.categoryId, mlData.listingTypeId, mlData.price, precoOverride)
       : null;
 
     const [row, cols] = calcularLinha(sku, mlDataCompleto, custoData, timestamp);
@@ -186,6 +198,10 @@ function atualizarPrecificacao() {
   if (rowsOrdenadas.length) {
     ws.getRange(2, 1, rowsOrdenadas.length, HEADERS_PREC.length).setValues(rowsOrdenadas);
     _colorirLinhas(ws, rowsOrdenadas, colsOrdenados);
+    // A ordenação por margem muda a posição de cada SKU a cada sync — reaplica
+    // a nota de simulação (se houver) na linha nova de cada um, e limpa a nota
+    // de quem não estiver mais simulando.
+    _aplicarNotasSimulacao(ws, rowsOrdenadas, simulacoes);
   }
 
   // Formatos de coluna
@@ -266,4 +282,174 @@ function _formatarColunas(ws, nRows) {
   ws.setColumnWidth(3, 220);  // C Nome
   ws.setColumnWidth(4, 120);  // D Categoria
   ws.autoResizeColumns(23, 2);// W..X (Status, Última Atualização)
+}
+
+// ── Simulação de Preço Praticado (promoção manual) ──────────────────────────
+//
+// Editar a coluna F (Preço Praticado) direto na planilha simula uma promoção:
+// recalcula taxa ML/RT/débitos/margem pra esse preço hipotético (via
+// onEditPrecificacao, trigger instalável). O preço original e o simulado
+// ficam guardados numa aba oculta (mesmo padrão do Cache NF) — isso é o que
+// permite: (1) sobreviver a uma "Sincronizar Tudo" completa, que reescreve a
+// aba inteira do zero, e (2) reverter pro preço real do ML depois
+// (restaurarPrecoOriginalSelecionadas).
+
+function lerSimulacoesPreco() {
+  const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ABA_SIMULACAO_PRECO);
+  if (!ws || ws.getLastRow() < 2) return {};
+  const dados = ws.getRange(2, 1, ws.getLastRow() - 1, HEADERS_SIMULACAO_PRECO.length).getValues();
+  const map = {};
+  dados.forEach(row => {
+    const sku = String(row[0]).trim();
+    if (!sku) return;
+    map[sku] = {
+      precoOriginal: parseFloat(row[1]) || 0,
+      precoSimulado: parseFloat(row[2]) || 0,
+      data: String(row[3] || ''),
+    };
+  });
+  return map;
+}
+
+// Grava (ou atualiza, se o SKU já estiver simulando) o preço simulado de um
+// SKU. precoOriginal só é usado na primeira vez — edições seguintes do mesmo
+// SKU mantêm o original já salvo (ver _aplicarSimulacaoPreco).
+function _gravarSimulacaoPreco(sku, precoOriginal, precoSimulado) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ws = ss.getSheetByName(ABA_SIMULACAO_PRECO);
+  if (!ws) {
+    ws = ss.insertSheet(ABA_SIMULACAO_PRECO);
+    ws.hideSheet();
+    ws.getRange(1, 1, 1, HEADERS_SIMULACAO_PRECO.length).setValues([HEADERS_SIMULACAO_PRECO]);
+  }
+
+  const lastRow = ws.getLastRow();
+  let targetRow = lastRow + 1;
+  if (lastRow >= 2) {
+    const skus = ws.getRange(2, 1, lastRow - 1, 1).getValues().map(r => String(r[0]));
+    const idx = skus.indexOf(sku);
+    if (idx >= 0) targetRow = idx + 2;
+  }
+
+  const agora = new Date().toLocaleString('pt-BR');
+  ws.getRange(targetRow, 1, 1, HEADERS_SIMULACAO_PRECO.length)
+    .setValues([[sku, precoOriginal, precoSimulado, agora]]);
+}
+
+function _removerSimulacaoPreco(sku) {
+  const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ABA_SIMULACAO_PRECO);
+  if (!ws || ws.getLastRow() < 2) return;
+  const skus = ws.getRange(2, 1, ws.getLastRow() - 1, 1).getValues().map(r => String(r[0]));
+  const idx = skus.indexOf(sku);
+  if (idx >= 0) ws.deleteRow(idx + 2);
+}
+
+// Texto da nota (comentário) exibida ao passar o mouse na célula de Preço
+// Praticado de uma linha com simulação ativa. ov = entrada de lerSimulacoesPreco().
+function _textoNotaSimulacao(ov) {
+  if (!ov) return '';
+  return `🔶 Simulação ativa — preço original: R$ ${ov.precoOriginal.toFixed(2)} (desde ${ov.data}).\n`
+       + `Menu "↩️ Restaurar Preço Original" volta ao preço real do ML.`;
+}
+
+// Reaplica a nota de simulação (coluna F) pra um conjunto de linhas já
+// gravadas, na ordem em que aparecem em `rows` — usado depois da reordenação
+// por margem no sync completo, já que a posição de cada SKU muda a cada vez.
+function _aplicarNotasSimulacao(ws, rows, simulacoes) {
+  if (!rows.length) return;
+  const notas = rows.map(row => [_textoNotaSimulacao(simulacoes[row[1]])]);
+  ws.getRange(2, 6, rows.length, 1).setNotes(notas);
+}
+
+// Trigger instalável de onEdit (ativado 1x via menu "🎯 Ativar Simulação de
+// Preço", ver ativarSimulacaoPreco em 07_Menu.gs) — nome próprio (não
+// "onEdit") pra não colidir com o trigger simples padrão, que não tem
+// permissão pra chamar UrlFetchApp (necessário pra recalcular taxa/RT no
+// preço simulado).
+function onEditPrecificacao(e) {
+  try {
+    if (!e || !e.range) return;
+    const sheet = e.range.getSheet();
+    if (sheet.getName() !== ABA_PRECIFICACAO) return;
+    if (e.range.getNumRows() !== 1 || e.range.getNumColumns() !== 1) return; // só edição de 1 célula
+
+    const row = e.range.getRow();
+    const col = e.range.getColumn();
+    if (row < 2 || col !== 6) return; // só coluna F (Preço Praticado), fora do cabeçalho
+
+    const colA = String(sheet.getRange(row, 1).getValue() || '').trim();
+    if (!colA.toUpperCase().startsWith('MLB')) return; // ignora linha "pai" de grupo (é média, não 1 anúncio)
+
+    const novoPreco = parseFloat(e.value);
+    if (!novoPreco || novoPreco <= 0) return; // limpar a célula não faz nada — use "Restaurar Preço Original"
+
+    const precoAnterior = (e.oldValue !== undefined && e.oldValue !== '')
+      ? parseFloat(e.oldValue)
+      : (parseFloat(sheet.getRange(row, 5).getValue()) || 0); // sem valor anterior: usa Preço Base
+
+    _aplicarSimulacaoPreco(colA.toUpperCase(), precoAnterior, novoPreco);
+  } catch (err) {
+    Logger.log('Erro onEditPrecificacao: ' + err.stack);
+    SpreadsheetApp.getActiveSpreadsheet().toast('⚠️ Erro ao simular preço: ' + err.message, 'BouwObra', 8);
+  }
+}
+
+function _aplicarSimulacaoPreco(mlbId, precoAnterior, novoPreco) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast(`Simulando preço R$ ${novoPreco.toFixed(2)} para ${mlbId}...`, 'BouwObra', -1);
+
+  const item = _buscarAnuncio(mlbId);
+  const sku = item ? extrairSellerSku(item) : null;
+  if (!sku) {
+    ss.toast('⚠️ Não achei o SKU desse anúncio — simulação não aplicada.', 'BouwObra', 8);
+    return;
+  }
+
+  // Preço original: preserva o já salvo se essa SKU já estiver em simulação
+  // (edições seguidas simulam preços diferentes sem perder o ponto de partida real).
+  const existente = lerSimulacoesPreco()[sku];
+  const precoOriginal = existente ? existente.precoOriginal : precoAnterior;
+  _gravarSimulacaoPreco(sku, precoOriginal, novoPreco);
+
+  const msg = _adicionarAnuncioIndividual(mlbId);
+  ss.toast(msg, 'BouwObra', 8);
+}
+
+// Remove a simulação das linhas selecionadas na Precificação e recalcula com
+// o preço REAL vigente no ML (não necessariamente igual ao "preço original"
+// salvo, se o preço do anúncio mudou nesse meio-tempo).
+function restaurarPrecoOriginalSelecionadas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ws = ss.getSheetByName(ABA_PRECIFICACAO);
+  const abaAtiva = ss.getActiveSheet();
+
+  if (!ws || abaAtiva.getName() !== ABA_PRECIFICACAO) {
+    ss.toast('Selecione linha(s) na aba Precificação primeiro.', 'BouwObra', 8);
+    return;
+  }
+  const sel = ss.getActiveRange();
+  if (!sel) {
+    ss.toast('Nenhuma linha selecionada.', 'BouwObra', 6);
+    return;
+  }
+
+  const r0 = Math.max(sel.getRow(), 2);
+  const r1 = sel.getRow() + sel.getNumRows() - 1;
+  const simulacoes = lerSimulacoesPreco();
+  let restaurados = 0;
+
+  for (let r = r0; r <= r1; r++) {
+    const colA = String(ws.getRange(r, 1).getValue() || '').trim();
+    if (!colA.toUpperCase().startsWith('MLB')) continue;
+    const sku = String(ws.getRange(r, 2).getValue() || '').trim();
+    if (!sku || !simulacoes[sku]) continue;
+
+    _removerSimulacaoPreco(sku);
+    _adicionarAnuncioIndividual(colA.toUpperCase());
+    restaurados++;
+  }
+
+  ss.toast(restaurados
+    ? `✅ ${restaurados} preço(s) restaurado(s) ao valor real do ML.`
+    : 'Nenhuma linha selecionada tinha simulação ativa.', 'BouwObra', 8);
 }

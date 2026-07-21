@@ -75,15 +75,18 @@ function _adicionarAnuncioIndividual(mlbId) {
   }
 
   const custoData = lerCacheNF()[sku] || null;
+  const simulacao = lerSimulacoesPreco()[sku] || null;
+  const precoOverride = simulacao ? simulacao.precoSimulado : null;
   const mlData = montarMlDataCompleto(
     item.id, item.title, item.status, item.category_id, item.listing_type_id,
-    parseFloat(item.price) || 0
+    parseFloat(item.price) || 0, precoOverride
   );
   const timestamp = new Date().toLocaleString('pt-BR');
   const [row, uncertainCols] = calcularLinha(sku, mlData, custoData, timestamp);
 
   const linhaGravada = _gravarOuAtualizarLinha(row, uncertainCols);
-  return '✅ ' + mlbId + ' (SKU ' + sku + ') gravado na linha ' + linhaGravada + ' da Precificação.';
+  return '✅ ' + mlbId + ' (SKU ' + sku + ') gravado na linha ' + linhaGravada + ' da Precificação.'
+       + (simulacao ? ` (simulação ativa: R$ ${simulacao.precoSimulado.toFixed(2)})` : '');
 }
 
 // Grava uma linha na Precificação: atualiza no lugar se o SKU já existir
@@ -111,6 +114,7 @@ function _gravarOuAtualizarLinha(row, uncertainCols) {
   ws.getRange(targetRow, 1, 1, HEADERS_PREC.length).setBackgrounds([_coresParaLinha(row, uncertainCols)]);
   _aplicarDropdownStatus(ws, targetRow, 1);
   _formatarColunas(ws, targetRow - 1);
+  ws.getRange(targetRow, 6).setNote(_textoNotaSimulacao(lerSimulacoesPreco()[sku]));
 
   return targetRow;
 }
@@ -196,6 +200,7 @@ function _construirBlocoGrupo(familyId) {
   }
 
   const cacheNF = lerCacheNF();
+  const simulacoes = lerSimulacoesPreco();
   const timestamp = new Date().toLocaleString('pt-BR');
   const linhas = []; // [row, uncertainCols]
   const semSku = [];
@@ -207,9 +212,10 @@ function _construirBlocoGrupo(familyId) {
     if (!sku) { semSku.push(mlbId); return; }
 
     const custoData = cacheNF[sku] || null;
+    const precoOverride = simulacoes[sku] ? simulacoes[sku].precoSimulado : null;
     const mlData = montarMlDataCompleto(
       item.id, item.title, item.status, item.category_id, item.listing_type_id,
-      parseFloat(item.price) || 0
+      parseFloat(item.price) || 0, precoOverride
     );
     linhas.push(calcularLinha(sku, mlData, custoData, timestamp));
   });
@@ -260,6 +266,10 @@ function _escreverBlocoGrupo(ws, startRow, bloco) {
   ws.getRange(startRow, 1, todasLinhas.length, HEADERS_PREC.length).setBackgrounds(cores);
   _aplicarDropdownStatus(ws, startRow, todasLinhas.length);
   _formatarColunas(ws, startRow + todasLinhas.length - 1);
+
+  const simulacoes = lerSimulacoesPreco();
+  const notas = todasLinhas.map(row => [_textoNotaSimulacao(simulacoes[row[1]])]); // '' pra linha "pai" (sem SKU real)
+  ws.getRange(startRow, 6, todasLinhas.length, 1).setNotes(notas);
 
   if (bloco.linhasVariacoes.length) {
     try {

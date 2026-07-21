@@ -377,17 +377,26 @@ function _aplicarNotasSimulacao(ws, rows, simulacoes) {
 // Assim, editar o Preço Praticado (F) recalcula tudo isso na hora, sem
 // precisar de script. G (Taxa ML %), H (RT) e I (Frete) continuam valor fixo
 // — vêm do último sync, não são recalculados por fórmula.
+//
+// A planilha está no locale pt_BR: o separador decimal é vírgula (não ponto),
+// e por isso o separador de argumentos de função também precisa ser ";"
+// (não ","), senão o Sheets não consegue distinguir "0,18" de dois argumentos
+// "0" e "18" — dá #ERROR! ("O separador de casas decimais é a vírgula (,),
+// e não o ponto (.)").
 function _paraFormulas(row, sheetRow) {
   const r = sheetRow;
   const nova = row.slice();
-  nova[9]  = `=ROUND(F${r}*${ICMS_VENDA},2)`;                                    // J ICMS Venda
-  nova[10] = `=ROUND((F${r}-J${r})*${PIS_VENDA},2)`;                            // K PIS Venda
-  nova[11] = `=ROUND((F${r}-J${r})*${COFINS_VENDA},2)`;                        // L COFINS Venda
-  nova[12] = `=ROUND(F${r}*G${r}/100-H${r}+I${r},2)`;                          // M Comissão + Frete
-  nova[13] = `=ROUND(M${r}*${PIS_VENDA},2)`;                                    // N PIS Crédito s/ Comissão+Frete
-  nova[14] = `=ROUND(M${r}*${COFINS_VENDA},2)`;                                // O COFINS Crédito s/ Comissão+Frete
-  nova[20] = `=ROUND(F${r}-M${r}-J${r}-K${r}-L${r}-P${r}+T${r}+N${r}+O${r},2)`; // U Margem Líquida (R$)
-  nova[21] = `=IF(F${r}>0,ROUND(U${r}/F${r}*100,2),0)`;                        // V Margem Líquida (%)
+  const icms   = String(ICMS_VENDA).replace('.', ',');
+  const pis    = String(PIS_VENDA).replace('.', ',');
+  const cofins = String(COFINS_VENDA).replace('.', ',');
+  nova[9]  = `=ROUND(F${r}*${icms};2)`;                                          // J ICMS Venda
+  nova[10] = `=ROUND((F${r}-J${r})*${pis};2)`;                                  // K PIS Venda
+  nova[11] = `=ROUND((F${r}-J${r})*${cofins};2)`;                               // L COFINS Venda
+  nova[12] = `=ROUND(F${r}*G${r}/100-H${r}+I${r};2)`;                           // M Comissão + Frete
+  nova[13] = `=ROUND(M${r}*${pis};2)`;                                          // N PIS Crédito s/ Comissão+Frete
+  nova[14] = `=ROUND(M${r}*${cofins};2)`;                                       // O COFINS Crédito s/ Comissão+Frete
+  nova[20] = `=ROUND(F${r}-M${r}-J${r}-K${r}-L${r}-P${r}+T${r}+N${r}+O${r};2)`;  // U Margem Líquida (R$)
+  nova[21] = `=IF(F${r}>0;ROUND(U${r}/F${r}*100;2);0)`;                        // V Margem Líquida (%)
   return nova;
 }
 

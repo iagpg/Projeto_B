@@ -142,6 +142,43 @@ function tinyGet(path, params, retry) {
   }
 }
 
+// Executa fetchAll com retry em 429: qualquer requisição limitada por taxa
+// dentro do lote é tentada de novo (só ela, não o lote inteiro) depois de uma
+// espera, em vez de virar silenciosamente null (que fazia impostos "some
+// rem" e o custo/crédito ficar zerado sem nenhum aviso).
+function _fetchAllComRetry429(buildRequests, maxTentativas) {
+  const n = buildRequests.length;
+  const resultados = new Array(n).fill(null);
+  let pendentes = buildRequests.map((req, i) => ({ req, i }));
+  let tentativa = 0;
+
+  while (pendentes.length && tentativa < (maxTentativas || 4)) {
+    const respostas = UrlFetchApp.fetchAll(pendentes.map(p => p.req));
+    const novasPendentes = [];
+
+    respostas.forEach((resp, idx) => {
+      const alvo = pendentes[idx];
+      const code = resp.getResponseCode();
+      if (code === 429) {
+        novasPendentes.push(alvo);
+        return;
+      }
+      if (code !== 200) { resultados[alvo.i] = null; return; }
+      try { resultados[alvo.i] = JSON.parse(resp.getContentText()); }
+      catch (e) { resultados[alvo.i] = null; }
+    });
+
+    pendentes = novasPendentes;
+    tentativa++;
+    if (pendentes.length) Utilities.sleep(3000);
+  }
+
+  if (pendentes.length) {
+    Logger.log(`Aviso: ${pendentes.length} requisição(ões) continuaram em 429 após ${maxTentativas || 4} tentativas.`);
+  }
+  return resultados;
+}
+
 // Busca múltiplas NFs em paralelo (fetchAll) — endpoint correto: /notas/{id}
 function tinyGetNfsParalelo(nfIds) {
   const p = getProps();
@@ -151,10 +188,7 @@ function tinyGetNfsParalelo(nfIds) {
     headers: { 'Authorization': 'Bearer ' + token },
     muteHttpExceptions: true,
   }));
-  return UrlFetchApp.fetchAll(requests).map(resp => {
-    if (resp.getResponseCode() !== 200) return null;
-    try { return JSON.parse(resp.getContentText()); } catch(e) { return null; }
-  });
+  return _fetchAllComRetry429(requests);
 }
 
 // Busca detalhes de itens individuais em paralelo — GET /notas/{nfId}/itens/{idItem}
@@ -167,8 +201,5 @@ function tinyGetItensParalelo(pairs) {
     headers: { 'Authorization': 'Bearer ' + token },
     muteHttpExceptions: true,
   }));
-  return UrlFetchApp.fetchAll(requests).map(resp => {
-    if (resp.getResponseCode() !== 200) return null;
-    try { return JSON.parse(resp.getContentText()); } catch(e) { return null; }
-  });
+  return _fetchAllComRetry429(requests);
 }

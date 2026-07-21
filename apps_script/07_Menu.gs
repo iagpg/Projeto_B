@@ -8,6 +8,7 @@ function onOpen() {
     .createMenu('BouwObra')
     .addItem('▶ Sincronizar Tudo', 'sincronizarTudo')
     .addItem('➕ Adicionar Anúncio (MLB/Family ID)', 'mostrarDialogoAdicionarAnuncio')
+    .addItem('🔄 Atualizar Selecionadas', 'atualizarSelecionadas')
     .addItem('🔍 Buscar NF (período/número)', 'mostrarDialogoBuscarNF')
     .addSeparator()
     .addSubMenu(

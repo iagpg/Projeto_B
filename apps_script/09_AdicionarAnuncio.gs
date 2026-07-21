@@ -186,11 +186,13 @@ function _buscarVariacoesGrupo(familyId) {
   return _resolverMembrosPorVarredura(familyId);
 }
 
-function _adicionarGrupoVariacoes(familyId) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+// Calcula o bloco pai+variações de uma família (puro — não escreve na planilha).
+// Retorna { erro } se não achar nada, ou { paiRow, paiUncertain, linhasVariacoes,
+// uncertainVariacoes, semSkuCount }.
+function _construirBlocoGrupo(familyId) {
   const mlbIds = _buscarVariacoesGrupo(familyId);
   if (!mlbIds.length) {
-    return '❌ Nenhuma variação encontrada para o Family ID ' + familyId;
+    return { erro: 'Nenhuma variação encontrada para o Family ID ' + familyId };
   }
 
   const cacheNF = lerCacheNF();
@@ -213,7 +215,7 @@ function _adicionarGrupoVariacoes(familyId) {
   });
 
   if (!linhas.length) {
-    return '❌ Nenhuma variação com SKU cadastrado no grupo ' + familyId;
+    return { erro: 'Nenhuma variação com SKU cadastrado no grupo ' + familyId };
   }
 
   // Linha "pai" = média das colunas numéricas (E..V) — cada variação pode ter
@@ -238,16 +240,20 @@ function _adicionarGrupoVariacoes(familyId) {
   // herda essa incerteza também.
   const paiUncertain = [...new Set(linhas.flatMap(([, cols]) => cols))];
 
-  let ws = ss.getSheetByName(ABA_PRECIFICACAO);
-  if (!ws) ws = ss.insertSheet(ABA_PRECIFICACAO);
-  if (ws.getLastRow() < 1) {
-    ws.getRange(1, 1, 1, HEADERS_PREC.length).setValues([HEADERS_PREC]);
-    ws.setFrozenRows(1);
-  }
-  const startRow = ws.getLastRow() + 1;
+  return {
+    paiRow, paiUncertain,
+    linhasVariacoes: linhas.map(([row]) => row),
+    uncertainVariacoes: linhas.map(([, cols]) => cols),
+    semSkuCount: semSku.length,
+  };
+}
 
-  const todasLinhas    = [paiRow, ...linhas.map(([row]) => row)];
-  const todosUncertain = [paiUncertain, ...linhas.map(([, cols]) => cols)];
+// Escreve o bloco pai+variações a partir de `startRow` (sobrescreve o que já
+// estiver lá) e reagrupa as linhas de variação. Usado tanto pra adicionar
+// (startRow = fim da planilha) quanto pra atualizar em lugar.
+function _escreverBlocoGrupo(ws, startRow, bloco) {
+  const todasLinhas    = [bloco.paiRow, ...bloco.linhasVariacoes];
+  const todosUncertain = [bloco.paiUncertain, ...bloco.uncertainVariacoes];
 
   ws.getRange(startRow, 1, todasLinhas.length, HEADERS_PREC.length).setValues(todasLinhas);
   const cores = todasLinhas.map((row, i) => _coresParaLinha(row, todosUncertain[i]));
@@ -255,16 +261,166 @@ function _adicionarGrupoVariacoes(familyId) {
   _aplicarDropdownStatus(ws, startRow, todasLinhas.length);
   _formatarColunas(ws, startRow + todasLinhas.length - 1);
 
-  // Agrupa as linhas de variação (não a linha "pai") para poder recolher/expandir
-  try {
-    const rangeVariacoes = ws.getRange(startRow + 1, 1, linhas.length, 1);
-    rangeVariacoes.shiftRowGroupDepth(1);
-    ws.getRowGroup(startRow + 1, 1).collapse();
-  } catch (e) {
-    Logger.log('Aviso: nao foi possivel agrupar/recolher as linhas: ' + e.message);
+  if (bloco.linhasVariacoes.length) {
+    try {
+      const rangeVariacoes = ws.getRange(startRow + 1, 1, bloco.linhasVariacoes.length, 1);
+      rangeVariacoes.shiftRowGroupDepth(1);
+      ws.getRowGroup(startRow + 1, 1).collapse();
+    } catch (e) {
+      Logger.log('Aviso: nao foi possivel agrupar/recolher as linhas: ' + e.message);
+    }
+  }
+}
+
+// Acha a extensão (início/fim) do bloco de um grupo já gravado, a partir da
+// linha do "pai", usando a profundidade de agrupamento das linhas de variação
+// (que ficam recolhidas logo abaixo dele).
+function _acharBlocoGrupo(ws, paiRow) {
+  const lastRow = ws.getLastRow();
+  let fim = paiRow;
+  for (let r = paiRow + 1; r <= lastRow; r++) {
+    if (ws.getRowGroupDepth(r) < 1) break;
+    fim = r;
+  }
+  return { inicio: paiRow, fim };
+}
+
+// Acha a linha do "pai" de um grupo já gravado na Precificação (coluna A ==
+// "GRUPO {familyId}"), ou -1 se o grupo ainda não existir na planilha.
+function _acharPaiGrupo(ws, familyId) {
+  const lastRow = ws.getLastRow();
+  if (lastRow < 2) return -1;
+  const marcador = 'GRUPO ' + familyId;
+  const colA = ws.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < colA.length; i++) {
+    if (String(colA[i][0]) === marcador) return i + 2;
+  }
+  return -1;
+}
+
+// Recalcula um grupo e sobrescreve o bloco existente (inicioAntigo..fimAntigo),
+// ajustando o número de linhas se a quantidade de variações mudou. Retorna o
+// número de linhas do bloco novo (pai + variações).
+function _atualizarGrupoNaPosicao(ws, inicioAntigo, fimAntigo, familyId) {
+  const bloco = _construirBlocoGrupo(familyId);
+  if (bloco.erro) throw new Error(bloco.erro);
+
+  const nAntigo = fimAntigo - inicioAntigo + 1;
+  const nNovo = 1 + bloco.linhasVariacoes.length;
+
+  // Remove o agrupamento antigo das linhas de variação antes de mexer no tamanho
+  if (fimAntigo > inicioAntigo) {
+    const grupoAntigo = ws.getRowGroup(inicioAntigo + 1, 1);
+    if (grupoAntigo) grupoAntigo.remove();
   }
 
-  let msg = '✅ Grupo ' + familyId + ': pai + ' + linhas.length + ' variações adicionadas (linha ' + startRow + ').';
-  if (semSku.length) msg += ' ' + semSku.length + ' variação(ões) sem SKU ignorada(s).';
+  if (nNovo > nAntigo) {
+    ws.insertRowsAfter(inicioAntigo, nNovo - nAntigo);
+  } else if (nNovo < nAntigo) {
+    ws.deleteRows(inicioAntigo + nNovo, nAntigo - nNovo);
+  }
+
+  _escreverBlocoGrupo(ws, inicioAntigo, bloco);
+  return nNovo;
+}
+
+// Adiciona um grupo novo, ou atualiza em lugar se o Family ID já existir na
+// Precificação (evita duplicar ao colar o mesmo Family ID de novo).
+function _adicionarGrupoVariacoes(familyId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ws = ss.getSheetByName(ABA_PRECIFICACAO);
+  if (!ws) ws = ss.insertSheet(ABA_PRECIFICACAO);
+  if (ws.getLastRow() < 1) {
+    ws.getRange(1, 1, 1, HEADERS_PREC.length).setValues([HEADERS_PREC]);
+    ws.setFrozenRows(1);
+  }
+
+  const paiExistente = _acharPaiGrupo(ws, familyId);
+  if (paiExistente > 0) {
+    const antigo = _acharBlocoGrupo(ws, paiExistente);
+    try {
+      const n = _atualizarGrupoNaPosicao(ws, antigo.inicio, antigo.fim, familyId);
+      return `✅ Grupo ${familyId} atualizado (linha ${paiExistente}, ${n - 1} variações).`;
+    } catch (e) {
+      return '❌ ' + e.message;
+    }
+  }
+
+  const bloco = _construirBlocoGrupo(familyId);
+  if (bloco.erro) return '❌ ' + bloco.erro;
+
+  const startRow = ws.getLastRow() + 1;
+  _escreverBlocoGrupo(ws, startRow, bloco);
+
+  let msg = `✅ Grupo ${familyId}: pai + ${bloco.linhasVariacoes.length} variações adicionadas (linha ${startRow}).`;
+  if (bloco.semSkuCount) msg += ` ${bloco.semSkuCount} variação(ões) sem SKU ignorada(s).`;
   return msg;
+}
+
+// ── Atualizar linha(s) selecionada(s) ─────────────────────────────────────────
+//
+// Reprocessa só o que está selecionado na aba Precificação (1 SKU individual,
+// ou o bloco inteiro de um grupo se a linha "pai" — "GRUPO ..." — estiver na
+// seleção), sem tocar no resto da planilha. Útil pra "essa NF não existia
+// quando adicionei, agora existe — quero atualizar só esse item".
+
+function atualizarSelecionadas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ws = ss.getSheetByName(ABA_PRECIFICACAO);
+  const abaAtiva = ss.getActiveSheet();
+
+  if (!ws || abaAtiva.getName() !== ABA_PRECIFICACAO) {
+    ss.toast('Selecione linha(s) na aba Precificação primeiro.', 'BouwObra', 8);
+    return;
+  }
+
+  const sel = ss.getActiveRange();
+  if (!sel) {
+    ss.toast('Nenhuma linha selecionada.', 'BouwObra', 6);
+    return;
+  }
+
+  let r = Math.max(sel.getRow(), 2); // nunca processa o cabeçalho
+  let fimVarredura = sel.getRow() + sel.getNumRows() - 1;
+
+  let atualizados = 0;
+  const erros = [];
+
+  while (r <= fimVarredura) {
+    const colA = String(ws.getRange(r, 1).getValue() || '').trim();
+
+    if (colA.startsWith('GRUPO ')) {
+      const familyId = colA.replace('GRUPO ', '').trim();
+      const antigo = _acharBlocoGrupo(ws, r);
+      const nAntigo = antigo.fim - antigo.inicio + 1;
+      try {
+        const nNovo = _atualizarGrupoNaPosicao(ws, antigo.inicio, antigo.fim, familyId);
+        fimVarredura += (nNovo - nAntigo);
+        r = antigo.inicio + nNovo;
+        atualizados++;
+      } catch (e) {
+        erros.push(familyId);
+        Logger.log('Erro ao atualizar grupo ' + familyId + ': ' + e.stack);
+        r = antigo.fim + 1;
+      }
+      continue;
+    }
+
+    if (colA.toUpperCase().startsWith('MLB')) {
+      try {
+        _adicionarAnuncioIndividual(colA.toUpperCase());
+        atualizados++;
+      } catch (e) {
+        erros.push(colA);
+        Logger.log('Erro ao atualizar ' + colA + ': ' + e.stack);
+      }
+    }
+    r++;
+  }
+
+  let msg = atualizados
+    ? `✅ ${atualizados} item(ns) atualizado(s).`
+    : 'Nenhum SKU/grupo reconhecido na seleção (coluna A precisa ser um MLB ID ou "GRUPO ...").';
+  if (erros.length) msg += ` ${erros.length} erro(s): ${erros.join(', ')} (ver Execuções para detalhes).`;
+  ss.toast(msg, 'BouwObra', 10);
 }

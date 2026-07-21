@@ -67,13 +67,19 @@ def _now_str() -> str:
 
 
 def _get_all_tiny_products() -> list:
-    """Retorna todos os produtos ativos do Tiny (situacao=A), com paginação."""
+    """Retorna todos os produtos ativos do Tiny (situacao=A), com paginação.
+
+    /produtos pagina por offset/limit (igual /notas) — o parâmetro "pagina"
+    é aceito mas IGNORADO pela API, sempre retornando a partir do offset 0.
+    Antes disso ser corrigido pra offset, o loop reconsultava a mesma
+    primeira página pra sempre.
+    """
     print("\n[Tiny] Buscando produtos ativos...")
     all_products = []
-    pagina       = 1
+    offset = 0
 
     while True:
-        data  = tiny_get("/produtos", {"situacao": "A", "pagina": pagina, "limite": 100})
+        data  = tiny_get("/produtos", {"situacao": "A", "offset": offset, "limit": 100})
         inner = data.get("data") or data
         items = (
             inner.get("itens")
@@ -85,12 +91,12 @@ def _get_all_tiny_products() -> list:
             break
         all_products.extend(items)
 
-        pag       = inner.get("paginacao") or inner.get("pagination") or {}
-        total_pag = int(pag.get("totalPaginas", pag.get("totalPages", 1)) or 1)
-        print(f"  Página {pagina}/{total_pag} — {len(all_products)} produtos")
-        if pagina >= total_pag:
+        pag   = inner.get("paginacao") or inner.get("pagination") or {}
+        total = int(pag.get("total", 0) or 0)
+        print(f"  {len(all_products)}/{total or '?'} produtos")
+        offset += 100
+        if (total and offset >= total) or len(items) < 100:
             break
-        pagina += 1
         time.sleep(0.15)
 
     print(f"  Total de produtos Tiny: {len(all_products)}")

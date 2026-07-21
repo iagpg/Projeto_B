@@ -6,8 +6,11 @@ Mapeia SKU → custo real de compra com valores absolutos de impostos por unidad
 
 Fluxo de API:
   GET /notas?tipo=E&limit=100&offset=0       → lista NFs de entrada
-  GET /notas/{id}                             → detalhe com itens[] (idItem, codigo, qty, valor)
+  GET /notas/{id}                             → detalhe com itens[] (idItem, idProduto, codigo, qty, valor)
   GET /notas/{id}/itens/{idItem}              → impostos por item (valorImposto de IPI/ICMS/PIS/COFINS)
+  GET /produtos?pagina=N&limite=100           → id + sku de todo o catálogo, usado pra resolver o SKU
+                                                 atual via idProduto (o "codigo" do item pode ser um
+                                                 código antigo/do fornecedor, diferente do SKU atual)
 
 Uso:
     from connectors.tiny.nf import build_sku_cost_map, CustoData
@@ -183,6 +186,50 @@ def _extract_imposto_valor(obj) -> float:
     return 0.0
 
 
+# ── Mapa idProduto → SKU atual ──────────────────────────────────────────────────
+#
+# O campo "codigo" de um item de NF pode ser o código usado NA NOTA (às vezes
+# o código do fornecedor, ou um código antigo/descontinuado) — diferente do
+# SKU atual do produto no Tiny. O item da NF também traz "idProduto" (ID
+# interno, estável), que é a forma confiável de achar o SKU real: basta
+# cruzar com a listagem de produtos (que retorna id + sku de todo o catálogo).
+# Exemplo real: NF 213583, item código "WPSRESENOINP46" → idProduto 991633087
+# → produto atual tem sku "10034034168445".
+
+def _build_id_produto_sku_map(verbose: bool = True) -> dict:
+    """
+    GET /produtos usa paginação por offset/limit (igual /notas) — o parâmetro
+    "pagina" é aceito mas IGNORADO pela API, sempre retornando a partir do
+    offset 0. Usar "pagina" faria isso reconsultar a mesma primeira página
+    pra sempre (e, com uma condição de parada baseada em contagem acumulada,
+    resultaria em produtos duplicados em vez de percorrer o catálogo real).
+    """
+    if verbose:
+        print("  Mapeando idProduto -> SKU atual (produtos)...")
+    mapa: dict[int, str] = {}
+    offset = 0
+    while True:
+        resp = tiny_get("/produtos", {"offset": offset, "limit": 100})
+        inner = resp.get("data") or resp
+        itens = inner.get("itens") or inner.get("produtos") or inner.get("items") or []
+        if not isinstance(itens, list) or not itens:
+            break
+        for p in itens:
+            pid = _int(p.get("id") or 0)
+            sku = str(p.get("sku") or p.get("codigo") or "").strip()
+            if pid and sku:
+                mapa[pid] = sku
+        pag = inner.get("paginacao") or inner.get("pagination") or {}
+        total = _int(pag.get("total", 0))
+        offset += 100
+        if offset >= total or len(itens) < 100:
+            break
+        time.sleep(0.1)
+    if verbose:
+        print(f"  {len(mapa)} produtos mapeados (idProduto -> SKU).")
+    return mapa
+
+
 # ── Mapa SKU → custo ──────────────────────────────────────────────────────────
 
 def build_sku_cost_map(months_back: int = 12,
@@ -246,6 +293,8 @@ def build_sku_cost_map(months_back: int = 12,
     if not nf_headers:
         return {}
 
+    id_produto_sku = _build_id_produto_sku_map(verbose=verbose)
+
     # ── Fase 2: para cada NF, buscar detalhes e custo por item ──
     sku_map: dict[str, CustoData] = {}
 
@@ -274,7 +323,8 @@ def build_sku_cost_map(months_back: int = 12,
             continue
 
         for item in items:
-            sku = str(item.get("codigo") or "").strip()
+            id_produto = _int(item.get("idProduto") or 0)
+            sku = id_produto_sku.get(id_produto) or str(item.get("codigo") or "").strip()
             if not sku:
                 continue
 

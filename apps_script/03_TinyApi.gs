@@ -4,19 +4,21 @@
 
 // ── Produtos ──────────────────────────────────────────────────────────────────
 
+// /produtos pagina por offset/limit (igual /notas) — o parâmetro "pagina" é
+// aceito mas IGNORADO pela API, sempre retornando a partir do offset 0.
 function getTinyProdutos() {
   const todos = [];
-  let pagina = 1;
+  let offset = 0;
   while (true) {
-    const data = tinyGet('/produtos', { situacao: 'A', pagina: pagina, limite: 100 });
+    const data = tinyGet('/produtos', { situacao: 'A', offset: offset, limit: 100 });
     const inner = (data.data) || data;
     const itens = inner.itens || inner.produtos || inner.items || (Array.isArray(inner) ? inner : []);
     if (!itens.length) break;
     todos.push(...itens);
     const pag = inner.paginacao || inner.pagination || {};
-    const totalPag = parseInt(pag.totalPaginas || pag.totalPages || 1, 10);
-    if (pagina >= totalPag) break;
-    pagina++;
+    const total = parseInt(pag.total || 0, 10);
+    offset += 100;
+    if ((total && offset >= total) || itens.length < 100) break;
     Utilities.sleep(150);
   }
   return todos;
@@ -24,6 +26,34 @@ function getTinyProdutos() {
 
 function extrairSkuTiny(produto) {
   return String(produto.codigo || produto.sku || produto.code || '').trim();
+}
+
+// Mapa idProduto (ID interno Tiny) -> SKU atual, escaneando TODO o catálogo
+// (sem filtro de situação — um item de NF antiga pode referenciar um produto
+// já descontinuado). Usado porque o "codigo" de um item de NF pode ser o
+// código usado na nota (às vezes do fornecedor), diferente do SKU atual do
+// produto no Tiny. Exemplo real: NF 213583, item código "WPSRESENOINP46" ->
+// idProduto 991633087 -> produto atual tem sku "10034034168445".
+function _construirMapaIdProdutoSku() {
+  const mapa = {};
+  let offset = 0;
+  while (true) {
+    const data = tinyGet('/produtos', { offset: offset, limit: 100 });
+    const inner = (data.data) || data;
+    const itens = inner.itens || inner.produtos || inner.items || (Array.isArray(inner) ? inner : []);
+    if (!itens.length) break;
+    itens.forEach(p => {
+      const id = parseInt(p.id || 0, 10);
+      const sku = extrairSkuTiny(p);
+      if (id && sku) mapa[id] = sku;
+    });
+    const pag = inner.paginacao || inner.pagination || {};
+    const total = parseInt(pag.total || 0, 10);
+    offset += 100;
+    if ((total && offset >= total) || itens.length < 100) break;
+    Utilities.sleep(150);
+  }
+  return mapa;
 }
 
 // ── Notas Fiscais de Entrada ───────────────────────────────────────────────────
@@ -123,6 +153,9 @@ function _listarNfIds(mesesAtras, dataInicioCustom, dataFimCustom, numeroCustom)
 // {id, numero, data}. Reutilizado pelo sync padrão (12 meses) e pela busca por
 // período/NF específica.
 function _processarNfHeaders(nfHeaders, ss) {
+  if (ss) ss.toast('Mapeando idProduto -> SKU atual...', 'BouwObra', -1);
+  const idProdutoSku = _construirMapaIdProdutoSku();
+
   // Fase 1: buscar detalhes das NFs para extrair lista de itens
   const pendingItems = []; // {nfId, nfNumero, nfData, idItem, sku, qty, unit, descricao}
   const BATCH = 30;
@@ -139,7 +172,11 @@ function _processarNfHeaders(nfHeaders, ss) {
       const itens = nota.itens || nota.items || nota.produtos || [];
 
       itens.forEach(item => {
-        const sku = String(item.codigo || '').trim();
+        // O "codigo" do item pode ser o código usado na nota (às vezes do
+        // fornecedor), diferente do SKU atual do produto — idProduto é estável
+        // e sempre aponta pro produto certo (ver _construirMapaIdProdutoSku).
+        const idProduto = parseInt(item.idProduto || 0, 10);
+        const sku = idProdutoSku[idProduto] || String(item.codigo || '').trim();
         if (!sku) return;
         const idItem   = parseInt(item.idItem || item.id || 0, 10);
         const qty      = parseFloat(item.quantidade || 1) || 1;

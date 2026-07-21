@@ -11,12 +11,7 @@ function onOpen() {
     .addItem('🔄 Atualizar Selecionadas', 'atualizarSelecionadas')
     .addItem('🔍 Buscar NF (período/número)', 'mostrarDialogoBuscarNF')
     .addSeparator()
-    .addSubMenu(
-      SpreadsheetApp.getUi().createMenu('Operações Individuais')
-        .addItem('Atualizar Cache de NFs (Tiny)', 'atualizarCacheNF')
-        .addItem('Atualizar Precificação',         'atualizarPrecificacao')
-        .addItem('Atualizar Dashboard',            'atualizarDashboard')
-    )
+    .addItem('Atualizar Dashboard', 'atualizarDashboard')
     .addSeparator()
     .addSubMenu(
       SpreadsheetApp.getUi().createMenu('🔧 Diagnóstico')

@@ -3,20 +3,22 @@
 // ============================================================
 //
 // Diálogo modal (mesmo padrão de 08_Autorizacao.gs): o usuário cola um MLB ID
-// (anúncio individual) ou um Family ID / item_group_id (grupo de variações) e
-// clica em Adicionar — a linha (ou o bloco pai+variações) é gravada direto na
+// (anúncio individual) ou um Family ID (grupo de variações) e clica em
+// Adicionar — a linha (ou o bloco pai+variações) é gravada direto na
 // Precificação, sem precisar de uma aba/célula fixa auxiliar.
 
 function mostrarDialogoAdicionarAnuncio() {
   const html = `
     <div style="font-family: Arial, sans-serif; font-size: 13px; padding: 4px;">
-      <p>Cole o <b>MLB ID</b> (ex: MLB3633227036) ou o <b>Family ID / item_group_id</b>
+      <p>Cole o <b>MLB ID</b> (ex: MLB3633227036) ou o <b>Family ID</b>
          (14+ dígitos) do anúncio:</p>
       <input type="text" id="valor" style="width: 95%; padding: 4px;"
-             placeholder="MLB3633227036 ou 8394429844084229">
+             placeholder="MLB3633227036 ou 8548824233871185">
       <br><br>
       <button onclick="processar()">Adicionar</button>
       <p id="resultado" style="color: #333; font-weight: bold;"></p>
+      <p style="color: #777; font-size: 11px;">Family ID pode demorar — a API não filtra por
+         grupo, então é preciso escanear todos os anúncios do vendedor.</p>
     </div>
     <script>
       function processar() {
@@ -30,7 +32,7 @@ function mostrarDialogoAdicionarAnuncio() {
       }
     </script>
   `;
-  const output = HtmlService.createHtmlOutput(html).setWidth(420).setHeight(220);
+  const output = HtmlService.createHtmlOutput(html).setWidth(420).setHeight(250);
   SpreadsheetApp.getUi().showModalDialog(output, 'Adicionar Anúncio à Precificação');
 }
 
@@ -39,7 +41,7 @@ function processarAdicionarAnuncioDialog(bruto) {
   if (!bruto) return 'Cole um MLB ID ou Family ID.';
 
   // Mesma convenção de scripts/check_promotions.py: 7-13 dígitos = anúncio
-  // individual, 14+ dígitos = grupo de variações (family_id / item_group_id).
+  // individual, 14+ dígitos = grupo de variações (family_id).
   const digitos = bruto.replace(/\D/g, '');
   const ehGrupo = digitos.length >= 14;
 
@@ -116,17 +118,47 @@ function _gravarOuAtualizarLinha(row, uncertainCols) {
 }
 
 // ── Grupo de variações (Family ID) ────────────────────────────────────────────
+//
+// O parâmetro family_id no endpoint de busca é ignorado pela API ML (retorna o
+// catálogo inteiro, sem filtrar) — confirmado tanto aqui quanto em
+// scripts/check_promotions.py. A única forma confiável é escanear TODOS os
+// itens do vendedor e comparar o campo family_id item a item.
+//
+// A paginação normal (limit/offset) trava em offset ~1000 (erro 400) — acima
+// disso é preciso usar search_type=scan + scroll_id (paginação tipo Elasticsearch).
 
-function _buscarVariacoesGrupo(itemGroupId) {
-  const data = mlGet(`/users/${ML_USER_ID_PROP()}/items/search`, { item_group_id: itemGroupId });
-  return (data && data.results) || [];
+function _buscarVariacoesGrupo(familyId) {
+  const allIds = [];
+  let data = mlGet(`/users/${ML_USER_ID_PROP()}/items/search`, { search_type: 'scan', limit: 100 });
+  allIds.push(...((data && data.results) || []));
+  let scrollId = data && data.scroll_id;
+
+  while (scrollId) {
+    data = mlGet(`/users/${ML_USER_ID_PROP()}/items/search`, { search_type: 'scan', scroll_id: scrollId, limit: 100 });
+    const results = (data && data.results) || [];
+    if (!results.length) break;
+    allIds.push(...results);
+    scrollId = data.scroll_id;
+    Utilities.sleep(50);
+  }
+
+  const membros = [];
+  for (let i = 0; i < allIds.length; i += 20) {
+    const chunk = allIds.slice(i, i + 20);
+    const items = mlGetBatch(chunk, 'id,family_id');
+    items.forEach(item => {
+      if (item.family_id && String(item.family_id) === String(familyId)) membros.push(item.id);
+    });
+    Utilities.sleep(50);
+  }
+  return membros;
 }
 
-function _adicionarGrupoVariacoes(itemGroupId) {
+function _adicionarGrupoVariacoes(familyId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const mlbIds = _buscarVariacoesGrupo(itemGroupId);
+  const mlbIds = _buscarVariacoesGrupo(familyId);
   if (!mlbIds.length) {
-    return '❌ Nenhuma variação encontrada para o Family ID ' + itemGroupId;
+    return '❌ Nenhuma variação encontrada para o Family ID ' + familyId;
   }
 
   const cacheNF = lerCacheNF();
@@ -149,7 +181,7 @@ function _adicionarGrupoVariacoes(itemGroupId) {
   });
 
   if (!linhas.length) {
-    return '❌ Nenhuma variação com SKU cadastrado no grupo ' + itemGroupId;
+    return '❌ Nenhuma variação com SKU cadastrado no grupo ' + familyId;
   }
 
   // Linha "pai" = média das colunas numéricas (E..V) — cada variação pode ter
@@ -159,7 +191,7 @@ function _adicionarGrupoVariacoes(itemGroupId) {
 
   const primeiraLinha = linhas[0][0];
   const paiRow = new Array(HEADERS_PREC.length).fill('');
-  paiRow[0] = 'GRUPO ' + itemGroupId;
+  paiRow[0] = 'GRUPO ' + familyId;
   paiRow[1] = linhas.length + ' variações';
   paiRow[2] = primeiraLinha[2];
   paiRow[3] = primeiraLinha[3];
@@ -200,7 +232,7 @@ function _adicionarGrupoVariacoes(itemGroupId) {
     Logger.log('Aviso: nao foi possivel agrupar/recolher as linhas: ' + e.message);
   }
 
-  let msg = '✅ Grupo ' + itemGroupId + ': pai + ' + linhas.length + ' variações adicionadas (linha ' + startRow + ').';
+  let msg = '✅ Grupo ' + familyId + ': pai + ' + linhas.length + ' variações adicionadas (linha ' + startRow + ').';
   if (semSku.length) msg += ' ' + semSku.length + ' variação(ões) sem SKU ignorada(s).';
   return msg;
 }

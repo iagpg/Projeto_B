@@ -29,7 +29,6 @@ function onOpen() {
     .addItem('⚙️ Inicializar Configurações', 'inicializarConfiguracoes')
     .addItem('🔑 Instalar Trigger Diário',   'instalarTriggerDiario')
     .addItem('🗑️ Remover Trigger Diário',    'removerTriggerDiario')
-    .addItem('🎯 Ativar Simulação de Preço (rodar 1x)', 'ativarSimulacaoPreco')
     .addToUi();
 }
 
@@ -91,28 +90,6 @@ function removerTriggerDiario() {
     .toast('Trigger diário removido.', 'BouwObra', 4);
 }
 
-// Trigger instalável de onEdit (recalcula taxas/margem ao editar o Preço
-// Praticado na Precificação pra simular uma promoção — ver
-// onEditPrecificacao em 05_Precificacao.gs). Precisa ser instalável (não um
-// simple trigger "onEdit") porque o handler chama UrlFetchApp (via mlGet)
-// pra recalcular taxa/RT no preço simulado — simple triggers não podem.
-// Rodar 1x (menu) — igual ao padrão do Trigger Diário.
-function ativarSimulacaoPreco() {
-  const jaExiste = ScriptApp.getProjectTriggers()
-    .some(t => t.getHandlerFunction() === 'onEditPrecificacao' && t.getEventType() === ScriptApp.EventType.ON_EDIT);
-
-  if (!jaExiste) {
-    ScriptApp.newTrigger('onEditPrecificacao')
-      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
-      .onEdit()
-      .create();
-  }
-
-  SpreadsheetApp.getActiveSpreadsheet().toast(
-    jaExiste ? 'Simulação de preço já estava ativa.' : '✅ Simulação de preço ativada — edite a coluna "Preço Praticado" pra simular.',
-    'BouwObra', 6
-  );
-}
 
 // ── Diagnóstico rápido ────────────────────────────────────────────────────────
 

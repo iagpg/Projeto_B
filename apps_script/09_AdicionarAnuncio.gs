@@ -75,16 +75,16 @@ function _adicionarAnuncioIndividual(mlbId) {
   }
 
   const custoData = lerCacheNF()[sku] || null;
-  const simulacao = lerSimulacoesPreco()[sku] || null;
-  const precoOverride = simulacao ? simulacao.precoSimulado : null;
-  const mlData = montarMlDataCompleto(
-    item.id, item.title, item.status, item.category_id, item.listing_type_id,
-    parseFloat(item.price) || 0, precoOverride
+  const simulacoes = lerSimulacoesPreco();
+  const mlData = _aplicarOverridePreco(
+    montarMlDataCompleto(item.id, item.title, item.status, item.category_id, item.listing_type_id, parseFloat(item.price) || 0),
+    sku, simulacoes
   );
   const timestamp = new Date().toLocaleString('pt-BR');
   const [row, uncertainCols] = calcularLinha(sku, mlData, custoData, timestamp);
 
   const linhaGravada = _gravarOuAtualizarLinha(row, uncertainCols);
+  const simulacao = simulacoes[sku];
   return '✅ ' + mlbId + ' (SKU ' + sku + ') gravado na linha ' + linhaGravada + ' da Precificação.'
        + (simulacao ? ` (simulação ativa: R$ ${simulacao.precoSimulado.toFixed(2)})` : '');
 }
@@ -110,7 +110,7 @@ function _gravarOuAtualizarLinha(row, uncertainCols) {
     if (idx >= 0) targetRow = idx + 2;
   }
 
-  ws.getRange(targetRow, 1, 1, HEADERS_PREC.length).setValues([row]);
+  ws.getRange(targetRow, 1, 1, HEADERS_PREC.length).setValues([_paraFormulas(row, targetRow)]);
   ws.getRange(targetRow, 1, 1, HEADERS_PREC.length).setBackgrounds([_coresParaLinha(row, uncertainCols)]);
   _aplicarDropdownStatus(ws, targetRow, 1);
   _formatarColunas(ws, targetRow - 1);
@@ -212,10 +212,9 @@ function _construirBlocoGrupo(familyId) {
     if (!sku) { semSku.push(mlbId); return; }
 
     const custoData = cacheNF[sku] || null;
-    const precoOverride = simulacoes[sku] ? simulacoes[sku].precoSimulado : null;
-    const mlData = montarMlDataCompleto(
-      item.id, item.title, item.status, item.category_id, item.listing_type_id,
-      parseFloat(item.price) || 0, precoOverride
+    const mlData = _aplicarOverridePreco(
+      montarMlDataCompleto(item.id, item.title, item.status, item.category_id, item.listing_type_id, parseFloat(item.price) || 0),
+      sku, simulacoes
     );
     linhas.push(calcularLinha(sku, mlData, custoData, timestamp));
   });
@@ -261,7 +260,8 @@ function _escreverBlocoGrupo(ws, startRow, bloco) {
   const todasLinhas    = [bloco.paiRow, ...bloco.linhasVariacoes];
   const todosUncertain = [bloco.paiUncertain, ...bloco.uncertainVariacoes];
 
-  ws.getRange(startRow, 1, todasLinhas.length, HEADERS_PREC.length).setValues(todasLinhas);
+  const linhasParaGravar = todasLinhas.map((row, i) => _paraFormulas(row, startRow + i));
+  ws.getRange(startRow, 1, todasLinhas.length, HEADERS_PREC.length).setValues(linhasParaGravar);
   const cores = todasLinhas.map((row, i) => _coresParaLinha(row, todosUncertain[i]));
   ws.getRange(startRow, 1, todasLinhas.length, HEADERS_PREC.length).setBackgrounds(cores);
   _aplicarDropdownStatus(ws, startRow, todasLinhas.length);

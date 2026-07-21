@@ -59,19 +59,32 @@ def load_cache() -> dict[str, CustoData]:
 
 
 def build_cache(force_full: bool = False, months_back: int = 12,
+                data_inicio: Optional[str] = None, data_fim: Optional[str] = None,
+                numero_nf: Optional[str] = None,
                 verbose: bool = True) -> dict[str, CustoData]:
     """
     Constrói ou atualiza o cache de custo NF.
 
     - force_full=True: varre os últimos `months_back` meses (ignora checkpoint)
     - force_full=False: varredura incremental — só NFs com id > last_nf_id
+    - data_inicio/data_fim: varre esse intervalo exato em vez de months_back —
+      útil pra preencher um período histórico específico (ex: um trecho de 2025
+      anterior ao que a varredura incremental já cobre)
+    - numero_nf: busca só essa NF específica
+
+    data_inicio/data_fim/numero_nf ignoram o checkpoint incremental (since_nf_id)
+    — um backfill de datas antigas não pode ser filtrado por "id > last_nf_id",
+    já que NFs mais antigas têm ids menores. Por segurança, o merge com o cache
+    existente só SOBRESCREVE um SKU se a NF nova for igual ou mais recente que
+    a já cacheada (evita que um backfill antigo derrube um custo mais atual).
 
     Salva resultado em cache/nf_custo.json e retorna dict sku → CustoData.
     """
     raw = _load_raw()
+    custom_range = bool(data_inicio or data_fim or numero_nf)
     since_nf_id: Optional[int] = None
 
-    if not force_full and raw:
+    if not force_full and not custom_range and raw:
         since_nf_id = raw.get("last_nf_id")
         if verbose and since_nf_id:
             print(f"  Modo incremental: buscando NFs com id > {since_nf_id}")
@@ -79,17 +92,22 @@ def build_cache(force_full: bool = False, months_back: int = 12,
     new_map = build_sku_cost_map(
         months_back=months_back,
         since_nf_id=since_nf_id,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
+        numero_nf=numero_nf,
         verbose=verbose,
     )
 
-    # Merge: novos sobrescrevem antigos (NFs mais recentes têm prioridade)
+    # Merge: mantém a NF mais recente por SKU (nf_data em "YYYY-MM-DD" ordena como string)
     existing_skus = raw.get("skus", {})
     for sku, custo in new_map.items():
-        existing_skus[sku] = custo.to_dict()
+        atual = existing_skus.get(sku)
+        if not atual or str(custo.nf_data) >= str(atual.get("nf_data", "")):
+            existing_skus[sku] = custo.to_dict()
 
     last_nf_id = raw.get("last_nf_id", 0)
-    if new_map:
-        last_nf_id = max(v.nf_id for v in new_map.values() if v.nf_id)
+    if new_map and not custom_range:
+        last_nf_id = max(last_nf_id, max(v.nf_id for v in new_map.values() if v.nf_id))
 
     _save_raw({
         "version":     datetime.now().isoformat(timespec="seconds"),

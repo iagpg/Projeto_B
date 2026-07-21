@@ -100,19 +100,25 @@ def _int(val, default=0) -> int:
 
 # ── Listagem de NFs ────────────────────────────────────────────────────────────
 
-def _list_nf_page(offset: int, data_inicio: str, data_fim: str) -> dict:
+def _list_nf_page(offset: int, data_inicio: str, data_fim: str,
+                   numero: Optional[str] = None) -> dict:
     """
     GET /notas?tipo=E&limit=100&offset=N
     Parâmetros corretos da API v3: limit/offset, datas YYYY-MM-DD, situacao como int.
     situacao=4 = Autorizada. Omitida para capturar todas (incluindo em processamento).
+
+    Se `numero` for passado, busca só essa NF específica (ignora o intervalo de datas).
     """
     params = {
-        "tipo":        "E",
-        "dataInicial": data_inicio,
-        "dataFinal":   data_fim,
-        "limit":       100,
-        "offset":      offset,
+        "tipo":  "E",
+        "limit": 100,
+        "offset": offset,
     }
+    if numero:
+        params["numero"] = numero
+    else:
+        params["dataInicial"] = data_inicio
+        params["dataFinal"]   = data_fim
     return tiny_get("/notas", params)
 
 
@@ -181,30 +187,40 @@ def _extract_imposto_valor(obj) -> float:
 
 def build_sku_cost_map(months_back: int = 12,
                        since_nf_id: Optional[int] = None,
+                       data_inicio: Optional[str] = None,
+                       data_fim: Optional[str] = None,
+                       numero_nf: Optional[str] = None,
                        verbose: bool = True) -> dict:
     """
     Varre NFs de entrada e retorna dict[sku → CustoData].
 
     Se since_nf_id for passado, busca apenas NFs com id > since_nf_id (incremental).
-    Mantém apenas a NF mais recente por SKU.
+    Se data_inicio/data_fim forem passados, usa esse intervalo exato em vez de
+    months_back (útil pra preencher um período histórico específico).
+    Se numero_nf for passado, busca só essa NF (ignora datas e since_nf_id).
+    Mantém apenas a NF mais recente por SKU (dentro desta varredura).
 
     Retorna:
         dict[str, CustoData]  — somente SKUs com custo encontrado
         O chamador pode verificar o maior nf_id processado via max(v.nf_id for v in result.values())
     """
-    hoje        = datetime.today()
-    data_inicio = (hoje - timedelta(days=30 * months_back)).strftime("%Y-%m-%d")
-    data_fim    = hoje.strftime("%Y-%m-%d")
+    hoje = datetime.today()
+    if not numero_nf:
+        data_inicio = data_inicio or (hoje - timedelta(days=30 * months_back)).strftime("%Y-%m-%d")
+        data_fim    = data_fim or hoje.strftime("%Y-%m-%d")
 
     if verbose:
-        modo = f"incremental (since_nf_id={since_nf_id})" if since_nf_id else "completo"
-        print(f"  Buscando NFs de entrada [{modo}]: {data_inicio} -> {data_fim}")
+        if numero_nf:
+            print(f"  Buscando NF específica: numero={numero_nf}")
+        else:
+            modo = f"incremental (since_nf_id={since_nf_id})" if since_nf_id else "completo"
+            print(f"  Buscando NFs de entrada [{modo}]: {data_inicio} -> {data_fim}")
 
     # ── Fase 1: listar todas as NFs de entrada ──────────────────
     nf_headers = []
     offset = 0
     while True:
-        resp = _list_nf_page(offset, data_inicio, data_fim)
+        resp = _list_nf_page(offset, data_inicio, data_fim, numero=numero_nf)
         page = _extract_nf_list(resp)
         if not page:
             break

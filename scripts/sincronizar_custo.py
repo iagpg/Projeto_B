@@ -8,6 +8,12 @@ Uso:
     python scripts/sincronizar_custo.py --full     # varredura completa (12 meses)
     python scripts/sincronizar_custo.py --report   # mostra mudanças sem gravar cache
     python scripts/sincronizar_custo.py --info     # exibe info do cache atual
+
+    # Período específico (não mexe no checkpoint incremental, faz merge com o cache):
+    python scripts/sincronizar_custo.py --desde 2025-01-01 --ate 2025-07-23
+
+    # Uma NF específica:
+    python scripts/sincronizar_custo.py --nf 059467
 """
 
 import sys, json
@@ -19,7 +25,15 @@ sys.path.insert(0, str(ROOT))
 
 from services.custo_service import build_cache, load_cache, detect_changes, cache_info
 
-ARGS = set(sys.argv[1:])
+ARGS = sys.argv[1:]
+
+
+def _arg_value(flag: str):
+    if flag in ARGS:
+        idx = ARGS.index(flag)
+        if idx + 1 < len(ARGS):
+            return ARGS[idx + 1]
+    return None
 
 
 def _fmt_brl(v) -> str:
@@ -59,6 +73,39 @@ def main():
         new = build_cache(force_full=True, verbose=True)
         alertas = detect_changes(old, new)
         _print_alertas(alertas)
+        return
+
+    # ── Período específico ou NF específica ─────────────────────
+    desde  = _arg_value("--desde")
+    ate    = _arg_value("--ate")
+    numero = _arg_value("--nf")
+
+    if numero:
+        print(f"\n  Modo: NF específica (numero={numero})")
+        old_cache = load_cache()
+        print(f"  Cache anterior: {len(old_cache)} SKUs")
+        print()
+        new_cache = build_cache(numero_nf=numero, verbose=True)
+        alertas = detect_changes(old_cache, new_cache)
+        _print_alertas(alertas)
+        if alertas:
+            _gravar_alertas_json(alertas)
+        print(f"\n  Concluído em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        print("=" * 60 + "\n")
+        return
+
+    if desde or ate:
+        print(f"\n  Modo: período específico ({desde or '...'} -> {ate or 'hoje'})")
+        old_cache = load_cache()
+        print(f"  Cache anterior: {len(old_cache)} SKUs")
+        print()
+        new_cache = build_cache(data_inicio=desde, data_fim=ate, verbose=True)
+        alertas = detect_changes(old_cache, new_cache)
+        _print_alertas(alertas)
+        if alertas:
+            _gravar_alertas_json(alertas)
+        print(f"\n  Concluído em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        print("=" * 60 + "\n")
         return
 
     # ── Sync normal (incremental ou full) ───────────────────────

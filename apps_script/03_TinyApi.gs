@@ -68,11 +68,11 @@ function _extrairItensNota(nota) {
   return nota.itens || nota.items || nota.produtos || nota.products || [];
 }
 
-// Retorna lista de {id, numero, data} das NFs de entrada
-function _listarNfIds(mesesAtras) {
-  const hoje = new Date();
-  const inicio = new Date(hoje);
-  inicio.setMonth(inicio.getMonth() - mesesAtras);
+// Retorna lista de {id, numero, data} das NFs de entrada.
+// dataInicioCustom/dataFimCustom (opcional, "YYYY-MM-DD") sobrepõem mesesAtras
+// — útil pra buscar um período histórico específico. numeroCustom (opcional)
+// busca só essa NF (ignora datas).
+function _listarNfIds(mesesAtras, dataInicioCustom, dataFimCustom, numeroCustom) {
   const fmtDate = d => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -80,16 +80,26 @@ function _listarNfIds(mesesAtras) {
     return `${y}-${m}-${dd}`;
   };
 
+  let dataInicial, dataFinal;
+  if (!numeroCustom) {
+    const hoje = new Date();
+    const inicio = new Date(hoje);
+    inicio.setMonth(inicio.getMonth() - mesesAtras);
+    dataInicial = dataInicioCustom || fmtDate(inicio);
+    dataFinal   = dataFimCustom || fmtDate(hoje);
+  }
+
   const nfHeaders = [];
   let offset = 0;
   while (true) {
-    const data = tinyGet('/notas', {
-      tipo:        'E',
-      dataInicial: fmtDate(inicio),
-      dataFinal:   fmtDate(hoje),
-      limit:       100,
-      offset:      offset,
-    });
+    const params = { tipo: 'E', limit: 100, offset: offset };
+    if (numeroCustom) {
+      params.numero = numeroCustom;
+    } else {
+      params.dataInicial = dataInicial;
+      params.dataFinal   = dataFinal;
+    }
+    const data = tinyGet('/notas', params);
     const inner = (data.data) || data;
     const itens = inner.itens || inner.notas || inner.items || (Array.isArray(inner) ? inner : []);
     if (!itens.length) break;
@@ -109,14 +119,10 @@ function _listarNfIds(mesesAtras) {
 
 // ── Build do Cache de Custos ───────────────────────────────────────────────────
 
-// Busca NF detalhes + impostos por item em lotes e grava na aba "Cache NF"
-function atualizarCacheNF() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.toast('Buscando notas fiscais de entrada...', 'BouwObra', -1);
-
-  const nfHeaders = _listarNfIds(12);
-  ss.toast(`${nfHeaders.length} NFs encontradas. Buscando itens...`, 'BouwObra', -1);
-
+// Busca detalhes + impostos por item em lotes pra uma lista de headers de NF
+// {id, numero, data}. Reutilizado pelo sync padrão (12 meses) e pela busca por
+// período/NF específica.
+function _processarNfHeaders(nfHeaders, ss) {
   // Fase 1: buscar detalhes das NFs para extrair lista de itens
   const pendingItems = []; // {nfId, nfNumero, nfData, idItem, sku, qty, unit, descricao}
   const BATCH = 30;
@@ -147,7 +153,7 @@ function atualizarCacheNF() {
     Utilities.sleep(100);
   }
 
-  ss.toast(`${pendingItems.length} itens. Buscando impostos...`, 'BouwObra', -1);
+  if (ss) ss.toast(`${pendingItems.length} itens. Buscando impostos...`, 'BouwObra', -1);
 
   // Fase 2: buscar impostos por item (GET /notas/{nfId}/itens/{idItem}) em lotes
   const costMap = {}; // sku → custo com valores absolutos
@@ -187,26 +193,128 @@ function atualizarCacheNF() {
     };
   });
 
-  // Gravar na aba Cache NF (oculta)
-  const agora = new Date().toLocaleString('pt-BR');
-  const rows = Object.entries(costMap).map(([sku, d]) => [
-    sku, d.custoBase, d.ipiValor, d.icmsCredito, d.pisCredito, d.cofinsCredito,
-    d.nfNumero, d.nfData, agora,
-  ]);
+  return costMap;
+}
 
+// Grava o costMap na aba Cache NF.
+// merge=false: substitui a aba inteira (sync padrão de 12 meses).
+// merge=true: mescla com o que já existe, mantendo por SKU a NF com nfData
+// mais recente — usado pela busca de período/NF específica, pra não apagar o
+// que já estava cacheado de fora desse período.
+function _gravarCacheNF(costMap, merge) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   let ws = ss.getSheetByName(ABA_CACHE_NF);
   if (!ws) {
     ws = ss.insertSheet(ABA_CACHE_NF);
     ws.hideSheet();
   }
+
+  let final = costMap;
+  if (merge) {
+    final = lerCacheNF(); // {sku: {custoBase,...,nfNumero,nfData}}
+    Object.entries(costMap).forEach(([sku, novo]) => {
+      const atual = final[sku];
+      if (!atual || String(novo.nfData) >= String(atual.nfData || '')) {
+        final[sku] = novo;
+      }
+    });
+  }
+
+  const agora = new Date().toLocaleString('pt-BR');
+  const rows = Object.entries(final).map(([sku, d]) => [
+    sku, d.custoBase, d.ipiValor, d.icmsCredito, d.pisCredito, d.cofinsCredito,
+    d.nfNumero, d.nfData, agora,
+  ]);
+
   ws.clearContents();
   ws.getRange(1, 1, 1, HEADERS_CACHE_NF.length).setValues([HEADERS_CACHE_NF]);
   if (rows.length) {
     ws.getRange(2, 1, rows.length, HEADERS_CACHE_NF.length).setValues(rows);
   }
 
-  ss.toast(`✅ Cache NF atualizado: ${rows.length} SKUs mapeados.`, 'BouwObra', 6);
+  return final;
+}
+
+// Busca NF detalhes + impostos por item em lotes e grava na aba "Cache NF"
+// (sync padrão: últimos 12 meses, substitui a aba inteira)
+function atualizarCacheNF() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Buscando notas fiscais de entrada...', 'BouwObra', -1);
+
+  const nfHeaders = _listarNfIds(12);
+  ss.toast(`${nfHeaders.length} NFs encontradas. Buscando itens...`, 'BouwObra', -1);
+
+  const costMap = _processarNfHeaders(nfHeaders, ss);
+  const final = _gravarCacheNF(costMap, false);
+
+  ss.toast(`✅ Cache NF atualizado: ${Object.keys(final).length} SKUs mapeados.`, 'BouwObra', 6);
   return costMap;
+}
+
+// ── Busca por período específico ou NF específica ─────────────────────────────
+//
+// Diferente do sync padrão: MESCLA com o cache existente em vez de substituir
+// (útil pra preencher um período histórico que o sync de 12 meses não cobre,
+// sem apagar os dados mais recentes que já estão lá).
+
+function mostrarDialogoBuscarNF() {
+  const html = `
+    <div style="font-family: Arial, sans-serif; font-size: 13px; padding: 4px;">
+      <p><b>Opção 1 — período específico:</b></p>
+      <p>
+        Data início: <input type="date" id="desde"><br><br>
+        Data fim: <input type="date" id="ate">
+      </p>
+      <p><b>Opção 2 — uma NF específica</b> (preenche em vez do período):</p>
+      <p><input type="text" id="numero" style="width: 95%; padding: 4px;" placeholder="Número da NF, ex: 059467"></p>
+      <button onclick="processar()">Buscar</button>
+      <p id="resultado" style="color: #333; font-weight: bold;"></p>
+    </div>
+    <script>
+      function processar() {
+        var desde  = document.getElementById('desde').value;
+        var ate    = document.getElementById('ate').value;
+        var numero = document.getElementById('numero').value.trim();
+        if (!desde && !ate && !numero) return;
+        document.getElementById('resultado').innerText = 'Buscando...';
+        google.script.run
+          .withSuccessHandler(function(msg) { document.getElementById('resultado').innerText = msg; })
+          .withFailureHandler(function(err) { document.getElementById('resultado').innerText = 'Erro: ' + err.message; })
+          .processarBuscarNFDialog(desde, ate, numero);
+      }
+    </script>
+  `;
+  const output = HtmlService.createHtmlOutput(html).setWidth(420).setHeight(320);
+  SpreadsheetApp.getUi().showModalDialog(output, 'Buscar NF de Compra (Tiny)');
+}
+
+function processarBuscarNFDialog(desde, ate, numero) {
+  try {
+    if (numero) return buscarNfPersonalizado(null, null, numero);
+    if (desde || ate) return buscarNfPersonalizado(desde || null, ate || null, null);
+    return 'Preencha um período ou um número de NF.';
+  } catch (e) {
+    Logger.log('Erro processarBuscarNFDialog: ' + e.stack);
+    return '❌ Erro: ' + e.message;
+  }
+}
+
+function buscarNfPersonalizado(dataInicio, dataFim, numero) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const label = numero ? `NF ${numero}` : `${dataInicio || '...'} até ${dataFim || 'hoje'}`;
+  ss.toast(`Buscando ${label}...`, 'BouwObra', -1);
+
+  const nfHeaders = _listarNfIds(null, dataInicio, dataFim, numero);
+  if (!nfHeaders.length) {
+    return `❌ Nenhuma NF encontrada para ${label}.`;
+  }
+  ss.toast(`${nfHeaders.length} NF(s) encontrada(s). Buscando itens...`, 'BouwObra', -1);
+
+  const costMap = _processarNfHeaders(nfHeaders, ss);
+  const final = _gravarCacheNF(costMap, true);
+
+  return `✅ ${label}: ${nfHeaders.length} NF(s) lida(s), ${Object.keys(costMap).length} SKU(s) processado(s) `
+       + `(${Object.keys(final).length} no cache total agora).`;
 }
 
 // Lê o cache já gravado (rápido, sem chamada de API)

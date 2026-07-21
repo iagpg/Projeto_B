@@ -375,22 +375,43 @@ function processarBuscarNFDialog(desde, ate, numero) {
   }
 }
 
+// Limite de NFs processadas por execução. Cada NF custa pelo menos 2
+// chamadas (detalhe + impostos por item, em média ~3-4 itens/NF) — um
+// período de vários meses (centenas de NFs) gera milhares de chamadas e
+// estoura o limite de 6 minutos de execução do Apps Script. Acima do limite,
+// processa só as NFs mais antigas do período e devolve o restante pra
+// continuar numa próxima chamada (a gravação é merge, então nada se perde).
+const _MAX_NF_POR_EXECUCAO = 100;
+
 function buscarNfPersonalizado(dataInicio, dataFim, numero) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const label = numero ? `NF ${numero}` : `${dataInicio || '...'} até ${dataFim || 'hoje'}`;
   ss.toast(`Buscando ${label}...`, 'BouwObra', -1);
 
-  const nfHeaders = _listarNfIds(null, dataInicio, dataFim, numero);
+  let nfHeaders = _listarNfIds(null, dataInicio, dataFim, numero);
   if (!nfHeaders.length) {
     return `❌ Nenhuma NF encontrada para ${label}.`;
   }
-  ss.toast(`${nfHeaders.length} NF(s) encontrada(s). Buscando itens...`, 'BouwObra', -1);
 
-  const costMap = _processarNfHeaders(nfHeaders, ss);
+  nfHeaders.sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+  const totalEncontradas = nfHeaders.length;
+  const restante = totalEncontradas > _MAX_NF_POR_EXECUCAO;
+  const lote = restante ? nfHeaders.slice(0, _MAX_NF_POR_EXECUCAO) : nfHeaders;
+
+  ss.toast(`${lote.length}/${totalEncontradas} NF(s). Buscando itens...`, 'BouwObra', -1);
+
+  const costMap = _processarNfHeaders(lote, ss);
   const final = _gravarCacheNF(costMap, true);
 
-  return `✅ ${label}: ${nfHeaders.length} NF(s) lida(s), ${Object.keys(costMap).length} SKU(s) processado(s) `
-       + `(${Object.keys(final).length} no cache total agora).`;
+  if (!restante) {
+    return `✅ ${label}: ${lote.length} NF(s) lida(s), ${Object.keys(costMap).length} SKU(s) processado(s) `
+         + `(${Object.keys(final).length} no cache total agora).`;
+  }
+
+  const ultimaData = lote[lote.length - 1].data;
+  return `⚠️ Período grande (${totalEncontradas} NFs) — processei as ${lote.length} mais antigas (até ${ultimaData}). `
+       + `${Object.keys(costMap).length} SKU(s) atualizados agora (${Object.keys(final).length} no cache total). `
+       + `Rode de novo com início ${ultimaData} até ${dataFim || 'hoje'} para continuar o restante.`;
 }
 
 // Lê o cache já gravado (rápido, sem chamada de API)

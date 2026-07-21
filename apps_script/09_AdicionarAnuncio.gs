@@ -17,8 +17,6 @@ function mostrarDialogoAdicionarAnuncio() {
       <br><br>
       <button onclick="processar()">Adicionar</button>
       <p id="resultado" style="color: #333; font-weight: bold;"></p>
-      <p style="color: #777; font-size: 11px;">Family ID pode demorar — a API não filtra por
-         grupo, então é preciso escanear todos os anúncios do vendedor.</p>
     </div>
     <script>
       function processar() {
@@ -32,7 +30,7 @@ function mostrarDialogoAdicionarAnuncio() {
       }
     </script>
   `;
-  const output = HtmlService.createHtmlOutput(html).setWidth(420).setHeight(250);
+  const output = HtmlService.createHtmlOutput(html).setWidth(420).setHeight(210);
   SpreadsheetApp.getUi().showModalDialog(output, 'Adicionar Anúncio à Precificação');
 }
 
@@ -119,15 +117,39 @@ function _gravarOuAtualizarLinha(row, uncertainCols) {
 
 // ── Grupo de variações (Family ID) ────────────────────────────────────────────
 //
-// O parâmetro family_id no endpoint de busca é ignorado pela API ML (retorna o
-// catálogo inteiro, sem filtrar) — confirmado tanto aqui quanto em
-// scripts/check_promotions.py. A única forma confiável é escanear TODOS os
-// itens do vendedor e comparar o campo family_id item a item.
-//
-// A paginação normal (limit/offset) trava em offset ~1000 (erro 400) — acima
-// disso é preciso usar search_type=scan + scroll_id (paginação tipo Elasticsearch).
+// GET /sites/MLB/user-products-families/{familyId} retorna os user_products_ids
+// (uma "User Product" por variação) direto, sem precisar escanear o catálogo.
+// Cada user_product_id é então resolvido pro MLB ID ativo via
+// /users/{seller}/items/search?user_product_id=X — esse filtro (ao contrário de
+// family_id) funciona de verdade. Às vezes retorna 2 itens pro mesmo
+// user_product_id (o anúncio antigo fechado por migração + o atual) — fica
+// com o de melhor status (ativo > pausado > fechado).
+const _ORDEM_STATUS_ = { active: 0, paused: 1, closed: 2 };
 
-function _buscarVariacoesGrupo(familyId) {
+function _resolverMembrosPorFamilia(familyId) {
+  const fam = mlGet(`/sites/MLB/user-products-families/${familyId}`, {});
+  const upIds = (fam && fam.user_products_ids) || [];
+  if (!upIds.length) return [];
+
+  const membros = [];
+  upIds.forEach(upId => {
+    const data = mlGet(`/users/${ML_USER_ID_PROP()}/items/search`, { user_product_id: upId });
+    const ids = (data && data.results) || [];
+    if (!ids.length) return;
+    if (ids.length === 1) { membros.push(ids[0]); return; }
+
+    const detalhes = mlGetBatch(ids, 'id,status');
+    detalhes.sort((a, b) => (_ORDEM_STATUS_[a.status] ?? 9) - (_ORDEM_STATUS_[b.status] ?? 9));
+    if (detalhes.length) membros.push(detalhes[0].id);
+    Utilities.sleep(30);
+  });
+  return membros;
+}
+
+// Fallback: só usado se o endpoint de família acima falhar/vier vazio.
+// Escaneia TODOS os itens do vendedor e compara o campo family_id item a item
+// (a paginação normal trava em offset ~1000 — usa search_type=scan + scroll_id).
+function _resolverMembrosPorVarredura(familyId) {
   const allIds = [];
   let data = mlGet(`/users/${ML_USER_ID_PROP()}/items/search`, { search_type: 'scan', limit: 100 });
   allIds.push(...((data && data.results) || []));
@@ -152,6 +174,16 @@ function _buscarVariacoesGrupo(familyId) {
     Utilities.sleep(50);
   }
   return membros;
+}
+
+function _buscarVariacoesGrupo(familyId) {
+  try {
+    const membros = _resolverMembrosPorFamilia(familyId);
+    if (membros.length) return membros;
+  } catch (e) {
+    Logger.log('Aviso: endpoint de familia falhou, caindo pra varredura: ' + e.message);
+  }
+  return _resolverMembrosPorVarredura(familyId);
 }
 
 function _adicionarGrupoVariacoes(familyId) {

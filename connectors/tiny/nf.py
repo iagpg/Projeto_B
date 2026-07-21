@@ -19,6 +19,7 @@ Uso:
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
@@ -28,6 +29,8 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent.parent))
 from connectors.tiny.client import get as tiny_get
+
+_MAX_WORKERS = 5  # concorrência das fases de busca — client.get() já trata 429 com backoff
 
 
 # ── Estrutura de custo por SKU ─────────────────────────────────────────────────
@@ -191,42 +194,38 @@ def _extract_imposto_valor(obj) -> float:
 # O campo "codigo" de um item de NF pode ser o código usado NA NOTA (às vezes
 # o código do fornecedor, ou um código antigo/descontinuado) — diferente do
 # SKU atual do produto no Tiny. O item da NF também traz "idProduto" (ID
-# interno, estável), que é a forma confiável de achar o SKU real: basta
-# cruzar com a listagem de produtos (que retorna id + sku de todo o catálogo).
-# Exemplo real: NF 213583, item código "WPSRESENOINP46" → idProduto 991633087
-# → produto atual tem sku "10034034168445".
+# interno, estável), que é a forma confiável de achar o SKU real: GET
+# /produtos/{idProduto} devolve o produto direto, sem precisar varrer o
+# catálogo. Exemplo real: NF 213583, item código "WPSRESENOINP46" →
+# idProduto 991633087 → produto atual tem sku "10034034168445".
 
-def _build_id_produto_sku_map(verbose: bool = True) -> dict:
-    """
-    GET /produtos usa paginação por offset/limit (igual /notas) — o parâmetro
-    "pagina" é aceito mas IGNORADO pela API, sempre retornando a partir do
-    offset 0. Usar "pagina" faria isso reconsultar a mesma primeira página
-    pra sempre (e, com uma condição de parada baseada em contagem acumulada,
-    resultaria em produtos duplicados em vez de percorrer o catálogo real).
-    """
+def _get_produto_sku(id_produto: int) -> Optional[str]:
+    """GET /produtos/{id} → SKU atual desse produto (None se falhar/não achar)."""
+    try:
+        resp = tiny_get(f"/produtos/{id_produto}")
+        produto = resp if ("id" in resp or "sku" in resp or "codigo" in resp) else (resp.get("data") or resp)
+        sku = str(produto.get("sku") or produto.get("codigo") or "").strip()
+        return sku or None
+    except Exception:
+        return None
+
+
+def _resolve_id_produto_sku(id_produtos: set, verbose: bool = True) -> dict:
+    """Resolve idProduto -> SKU atual, um GET /produtos/{id} por ID, em paralelo."""
+    id_produtos = {p for p in id_produtos if p}
+    if not id_produtos:
+        return {}
+
     if verbose:
-        print("  Mapeando idProduto -> SKU atual (produtos)...")
+        print(f"  Resolvendo {len(id_produtos)} idProduto -> SKU...")
     mapa: dict[int, str] = {}
-    offset = 0
-    while True:
-        resp = tiny_get("/produtos", {"offset": offset, "limit": 100})
-        inner = resp.get("data") or resp
-        itens = inner.get("itens") or inner.get("produtos") or inner.get("items") or []
-        if not isinstance(itens, list) or not itens:
-            break
-        for p in itens:
-            pid = _int(p.get("id") or 0)
-            sku = str(p.get("sku") or p.get("codigo") or "").strip()
-            if pid and sku:
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+        futuros = {pool.submit(_get_produto_sku, pid): pid for pid in id_produtos}
+        for futuro in as_completed(futuros):
+            pid = futuros[futuro]
+            sku = futuro.result()
+            if sku:
                 mapa[pid] = sku
-        pag = inner.get("paginacao") or inner.get("pagination") or {}
-        total = _int(pag.get("total", 0))
-        offset += 100
-        if offset >= total or len(itens) < 100:
-            break
-        time.sleep(0.1)
-    if verbose:
-        print(f"  {len(mapa)} produtos mapeados (idProduto -> SKU).")
     return mapa
 
 
@@ -293,33 +292,48 @@ def build_sku_cost_map(months_back: int = 12,
     if not nf_headers:
         return {}
 
-    id_produto_sku = _build_id_produto_sku_map(verbose=verbose)
+    # ── Fase 2: buscar o DETALHE de TODAS as NFs (concorrente) ──────────────────
+    # Busca tudo primeiro; o cálculo (fase 5) é só aritmética em memória depois,
+    # sem nenhuma chamada de API — evita ficar alternando 1 chamada / 1 cálculo /
+    # 1 chamada..., que é o que fazia o rate limit da API estourar com mais
+    # facilidade (cada chamada isolada carrega overhead de rede fixo).
+    nf_ids = [_int(h.get("id", 0)) for h in nf_headers if _int(h.get("id", 0))]
+    if verbose:
+        print(f"  Buscando detalhes de {len(nf_ids)} NFs (até {_MAX_WORKERS} em paralelo)...")
 
-    # ── Fase 2: para cada NF, buscar detalhes e custo por item ──
-    sku_map: dict[str, CustoData] = {}
+    detalhes_por_nf: dict[int, dict] = {}
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+        futuros = {pool.submit(_get_nf_detail, nf_id): nf_id for nf_id in nf_ids}
+        for i, futuro in enumerate(as_completed(futuros), 1):
+            nf_id = futuros[futuro]
+            try:
+                detalhes_por_nf[nf_id] = futuro.result()
+            except Exception as e:
+                if verbose:
+                    print(f"  Aviso: erro ao buscar NF {nf_id}: {e}")
+            if verbose and i % 50 == 0:
+                print(f"  NFs: {i}/{len(nf_ids)}")
 
-    for idx, nf_hdr in enumerate(nf_headers, 1):
-        nf_id     = _int(nf_hdr.get("id", 0))
+    # ── Fase 3: resolver idProduto -> SKU só p/ os IDs citados nestas NFs ───────
+    id_produtos_citados = {
+        _int(item.get("idProduto") or 0)
+        for detail in detalhes_por_nf.values()
+        for item in (detail.get("itens") or [])
+    }
+    id_produto_sku = _resolve_id_produto_sku(id_produtos_citados, verbose=verbose)
+
+    # ── Fase 3b: montar a lista de itens pendentes (ainda sem impostos) ─────────
+    pendentes = []  # {nf_id, nf_numero, nf_data, id_item, sku, qty, unit, descricao}
+    for nf_hdr in nf_headers:
+        nf_id = _int(nf_hdr.get("id", 0))
+        detail = detalhes_por_nf.get(nf_id)
+        if not detail:
+            continue
         nf_numero = str(nf_hdr.get("numero") or "").strip()
         nf_data   = str(nf_hdr.get("dataEmissao") or "").strip()
 
-        if not nf_id:
-            continue
-
-        if verbose and idx % 20 == 0:
-            print(f"  Processando NF {idx}/{len(nf_headers)}...")
-
-        try:
-            detail = _get_nf_detail(nf_id)
-        except Exception as e:
-            if verbose:
-                print(f"  Aviso: erro ao buscar NF {nf_id}: {e}")
-            time.sleep(0.3)
-            continue
-
         items = detail.get("itens") or []
         if not isinstance(items, list):
-            time.sleep(0.1)
             continue
 
         for item in items:
@@ -327,41 +341,53 @@ def build_sku_cost_map(months_back: int = 12,
             sku = id_produto_sku.get(id_produto) or str(item.get("codigo") or "").strip()
             if not sku:
                 continue
-
-            id_item  = _int(item.get("idItem") or item.get("id") or 0)
-            qty      = _float(item.get("quantidade") or 1) or 1
-            unit     = _float(item.get("valorUnitario") or 0)
-            descricao = str(item.get("descricao") or "").strip()
-
+            unit = _float(item.get("valorUnitario") or 0)
             if unit <= 0:
                 continue
+            pendentes.append({
+                "nf_id": nf_id, "nf_numero": nf_numero, "nf_data": nf_data,
+                "id_item": _int(item.get("idItem") or item.get("id") or 0),
+                "sku": sku,
+                "qty": _float(item.get("quantidade") or 1) or 1,
+                "unit": unit,
+                "descricao": str(item.get("descricao") or "").strip(),
+            })
 
-            # Busca impostos detalhados por item
-            ipi_val = icms_val = pis_val = cofins_val = 0.0
-            if id_item:
-                item_detail = _get_nf_item_detail(nf_id, id_item)
-                ipi_val    = _extract_imposto_valor(item_detail.get("ipi"))    / qty
-                icms_val   = _extract_imposto_valor(item_detail.get("icms"))   / qty
-                pis_val    = _extract_imposto_valor(item_detail.get("pis"))    / qty
-                cofins_val = _extract_imposto_valor(item_detail.get("cofins")) / qty
-                time.sleep(0.5)  # respeita rate limit Tiny (~60 req/min)
+    # ── Fase 4: buscar os impostos de TODOS os itens (concorrente) ─────────────
+    com_id_item = [p for p in pendentes if p["id_item"]]
+    if verbose:
+        print(f"  Buscando impostos de {len(com_id_item)} itens (até {_MAX_WORKERS} em paralelo)...")
 
-            # Mantém apenas a NF mais recente por SKU
-            if sku not in sku_map:
-                sku_map[sku] = CustoData(
-                    sku=sku,
-                    descricao=descricao,
-                    custo_base=round(unit, 4),
-                    ipi_valor=round(ipi_val, 4),
-                    icms_credito=round(icms_val, 4),
-                    pis_credito=round(pis_val, 4),
-                    cofins_credito=round(cofins_val, 4),
-                    nf_numero=nf_numero,
-                    nf_data=nf_data,
-                    nf_id=nf_id,
-                )
+    impostos_por_item: dict[tuple, dict] = {}
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+        futuros = {pool.submit(_get_nf_item_detail, p["nf_id"], p["id_item"]): p for p in com_id_item}
+        for i, futuro in enumerate(as_completed(futuros), 1):
+            p = futuros[futuro]
+            impostos_por_item[(p["nf_id"], p["id_item"])] = futuro.result()
+            if verbose and i % 50 == 0:
+                print(f"  Itens: {i}/{len(com_id_item)}")
 
-        time.sleep(0.1)
+    # ── Fase 5: cálculo final — puro em memória, nenhuma chamada de API aqui ───
+    sku_map: dict[str, CustoData] = {}
+    for p in pendentes:
+        sku = p["sku"]
+        if sku in sku_map:
+            continue  # mantém a NF mais recente por SKU (primeira encontrada, mesma ordem de nf_headers)
+
+        taxes = impostos_por_item.get((p["nf_id"], p["id_item"]), {}) if p["id_item"] else {}
+        qty = p["qty"]
+        sku_map[sku] = CustoData(
+            sku=sku,
+            descricao=p["descricao"],
+            custo_base=round(p["unit"], 4),
+            ipi_valor=round(_extract_imposto_valor(taxes.get("ipi")) / qty, 4),
+            icms_credito=round(_extract_imposto_valor(taxes.get("icms")) / qty, 4),
+            pis_credito=round(_extract_imposto_valor(taxes.get("pis")) / qty, 4),
+            cofins_credito=round(_extract_imposto_valor(taxes.get("cofins")) / qty, 4),
+            nf_numero=p["nf_numero"],
+            nf_data=p["nf_data"],
+            nf_id=p["nf_id"],
+        )
 
     if verbose:
         print(f"  SKUs com custo mapeado: {len(sku_map)}")

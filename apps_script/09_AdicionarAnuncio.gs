@@ -2,63 +2,56 @@
 // 09_AdicionarAnuncio.gs — Adicionar anúncio manualmente (MLB ou Family ID)
 // ============================================================
 //
-// Aba separada da Precificação de propósito: a Precificação é reescrita do
-// zero (ws.clearContents/clearFormats) a cada Sincronizar Tudo, então qualquer
-// área fixa dentro dela seria apagada. Aqui o usuário cola um MLB ID (anúncio
-// individual) ou um Family ID / item_group_id (grupo de variações) e roda pelo
-// menu — a linha (ou o bloco pai+variações) é gravada direto na Precificação.
+// Diálogo modal (mesmo padrão de 08_Autorizacao.gs): o usuário cola um MLB ID
+// (anúncio individual) ou um Family ID / item_group_id (grupo de variações) e
+// clica em Adicionar — a linha (ou o bloco pai+variações) é gravada direto na
+// Precificação, sem precisar de uma aba/célula fixa auxiliar.
 
-const ABA_ADICIONAR       = 'Adicionar Anúncio';
-const ADICIONAR_INPUT_CELL = 'B3';
-
-function garantirAbaAdicionar() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let ws = ss.getSheetByName(ABA_ADICIONAR);
-  if (ws) return ws;
-
-  ws = ss.insertSheet(ABA_ADICIONAR);
-  ws.getRange('A1').setValue('Adicionar anúncio manualmente à Precificação')
-    .setFontWeight('bold').setFontSize(13);
-  ws.getRange('A3').setValue('Cole aqui →').setFontWeight('bold');
-  ws.getRange('A5').setValue(
-    'Depois de colar, use o menu BouwObra → ➕ Adicionar Anúncio.\n\n' +
-    'MLB ID (ex: MLB3633227036) → adiciona ou atualiza 1 linha na Precificação.\n\n' +
-    'Family ID / item_group_id (14+ dígitos) → adiciona a linha "pai" (média das ' +
-    'variações) + uma linha por variação, agrupadas — use o "+"/"−" que aparece ' +
-    'na lateral esquerda da planilha para expandir/recolher.'
-  ).setWrap(true);
-  ws.setColumnWidth(1, 500);
-  ws.getRange(ADICIONAR_INPUT_CELL).setBackground('#fff3cd').setFontWeight('bold');
-  return ws;
+function mostrarDialogoAdicionarAnuncio() {
+  const html = `
+    <div style="font-family: Arial, sans-serif; font-size: 13px; padding: 4px;">
+      <p>Cole o <b>MLB ID</b> (ex: MLB3633227036) ou o <b>Family ID / item_group_id</b>
+         (14+ dígitos) do anúncio:</p>
+      <input type="text" id="valor" style="width: 95%; padding: 4px;"
+             placeholder="MLB3633227036 ou 8394429844084229">
+      <br><br>
+      <button onclick="processar()">Adicionar</button>
+      <p id="resultado" style="color: #333; font-weight: bold;"></p>
+    </div>
+    <script>
+      function processar() {
+        var valor = document.getElementById('valor').value.trim();
+        if (!valor) return;
+        document.getElementById('resultado').innerText = 'Processando ' + valor + '...';
+        google.script.run
+          .withSuccessHandler(function(msg) { document.getElementById('resultado').innerText = msg; })
+          .withFailureHandler(function(err) { document.getElementById('resultado').innerText = 'Erro: ' + err.message; })
+          .processarAdicionarAnuncioDialog(valor);
+      }
+    </script>
+  `;
+  const output = HtmlService.createHtmlOutput(html).setWidth(420).setHeight(220);
+  SpreadsheetApp.getUi().showModalDialog(output, 'Adicionar Anúncio à Precificação');
 }
 
-function adicionarAnuncioManual() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const ws = garantirAbaAdicionar();
-  const bruto = String(ws.getRange(ADICIONAR_INPUT_CELL).getValue() || '').trim();
-
-  if (!bruto) {
-    ss.toast('Cole um MLB ID ou Family ID na célula ' + ADICIONAR_INPUT_CELL + ' antes de rodar.', 'BouwObra', 8);
-    return;
-  }
+function processarAdicionarAnuncioDialog(bruto) {
+  bruto = String(bruto || '').trim();
+  if (!bruto) return 'Cole um MLB ID ou Family ID.';
 
   // Mesma convenção de scripts/check_promotions.py: 7-13 dígitos = anúncio
   // individual, 14+ dígitos = grupo de variações (family_id / item_group_id).
   const digitos = bruto.replace(/\D/g, '');
   const ehGrupo = digitos.length >= 14;
 
-  ss.toast('Processando ' + bruto + '...', 'BouwObra', -1);
-
   try {
     if (ehGrupo) {
-      _adicionarGrupoVariacoes(digitos);
-    } else {
-      const mlbId = bruto.toUpperCase().startsWith('MLB') ? bruto.toUpperCase() : ('MLB' + digitos);
-      _adicionarAnuncioIndividual(mlbId);
+      return _adicionarGrupoVariacoes(digitos);
     }
+    const mlbId = bruto.toUpperCase().startsWith('MLB') ? bruto.toUpperCase() : ('MLB' + digitos);
+    return _adicionarAnuncioIndividual(mlbId);
   } catch (e) {
-    ss.toast('Erro: ' + e.message, 'BouwObra', 10);
-    Logger.log('Erro adicionarAnuncioManual: ' + e.stack);
+    Logger.log('Erro processarAdicionarAnuncioDialog: ' + e.stack);
+    return '❌ Erro: ' + e.message;
   }
 }
 
@@ -71,17 +64,14 @@ function _buscarAnuncio(mlbId) {
 // ── Anúncio individual ────────────────────────────────────────────────────────
 
 function _adicionarAnuncioIndividual(mlbId) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const item = _buscarAnuncio(mlbId);
   if (!item || !item.id) {
-    ss.toast('Anúncio não encontrado: ' + mlbId, 'BouwObra', 8);
-    return;
+    return '❌ Anúncio não encontrado: ' + mlbId;
   }
 
   const sku = extrairSellerSku(item);
   if (!sku) {
-    ss.toast('Anúncio ' + mlbId + ' não tem SKU cadastrado (campo "Código" vazio no ML).', 'BouwObra', 10);
-    return;
+    return '❌ Anúncio ' + mlbId + ' não tem SKU cadastrado (campo "Código" vazio no ML).';
   }
 
   const custoData = lerCacheNF()[sku] || null;
@@ -93,7 +83,7 @@ function _adicionarAnuncioIndividual(mlbId) {
   const [row, uncertainCols] = calcularLinha(sku, mlData, custoData, timestamp);
 
   const linhaGravada = _gravarOuAtualizarLinha(row, uncertainCols);
-  ss.toast('✅ ' + mlbId + ' (SKU ' + sku + ') gravado na linha ' + linhaGravada + ' da Precificação.', 'BouwObra', 8);
+  return '✅ ' + mlbId + ' (SKU ' + sku + ') gravado na linha ' + linhaGravada + ' da Precificação.';
 }
 
 // Grava uma linha na Precificação: atualiza no lugar se o SKU já existir
@@ -136,8 +126,7 @@ function _adicionarGrupoVariacoes(itemGroupId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const mlbIds = _buscarVariacoesGrupo(itemGroupId);
   if (!mlbIds.length) {
-    ss.toast('Nenhuma variação encontrada para o Family ID ' + itemGroupId, 'BouwObra', 8);
-    return;
+    return '❌ Nenhuma variação encontrada para o Family ID ' + itemGroupId;
   }
 
   const cacheNF = lerCacheNF();
@@ -160,8 +149,7 @@ function _adicionarGrupoVariacoes(itemGroupId) {
   });
 
   if (!linhas.length) {
-    ss.toast('Nenhuma variação com SKU cadastrado no grupo ' + itemGroupId, 'BouwObra', 10);
-    return;
+    return '❌ Nenhuma variação com SKU cadastrado no grupo ' + itemGroupId;
   }
 
   // Linha "pai" = média das colunas numéricas (E..V) — cada variação pode ter
@@ -214,5 +202,5 @@ function _adicionarGrupoVariacoes(itemGroupId) {
 
   let msg = '✅ Grupo ' + itemGroupId + ': pai + ' + linhas.length + ' variações adicionadas (linha ' + startRow + ').';
   if (semSku.length) msg += ' ' + semSku.length + ' variação(ões) sem SKU ignorada(s).';
-  ss.toast(msg, 'BouwObra', 10);
+  return msg;
 }

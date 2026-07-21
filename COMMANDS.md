@@ -404,7 +404,7 @@ Google Apps Script — sem executar código local.
 | Função | Descrição |
 |---|---|
 | `sincronizarTudo` | Cache NF + Precificação + Dashboard em sequência |
-| `adicionarAnuncioManual` | Adiciona/atualiza 1 anúncio (MLB ID) ou um grupo de variações (Family ID) na Precificação, sem esperar o sync completo — ver aba "Adicionar Anúncio" |
+| `mostrarDialogoAdicionarAnuncio` | Abre um diálogo pra colar 1 MLB ID ou Family ID e adicionar/atualizar direto na Precificação, sem esperar o sync completo (ver `09_AdicionarAnuncio.gs`) |
 | `atualizarCacheNF` | Varre NFs de entrada do Tiny (últimos 12 meses) |
 | `atualizarPrecificacao` | Calcula margens e grava aba Precificação |
 | `atualizarDashboard` | Busca KPIs ML e grava aba Dashboard |

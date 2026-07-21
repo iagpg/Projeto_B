@@ -127,7 +127,19 @@ function tinyGet(path, params, retry) {
     refreshTinyToken();
     return tinyGet(path, params, false);
   }
-  return JSON.parse(resp.getContentText());
+  if (code === 429) {
+    Utilities.sleep(3000);
+    return tinyGet(path, params, retry);
+  }
+
+  const texto = resp.getContentText();
+  try {
+    return JSON.parse(texto);
+  } catch (e) {
+    // Corpo vazio/inválido (erro do Tiny, timeout, etc.) — erro claro em vez de
+    // "Unexpected end of JSON input"
+    throw new Error(`Tiny respondeu HTTP ${code} com corpo inválido: ${texto.substring(0, 200) || '(vazio)'}`);
+  }
 }
 
 // Busca múltiplas NFs em paralelo (fetchAll) — endpoint correto: /notas/{id}

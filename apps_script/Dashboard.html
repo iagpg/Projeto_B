@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --navy: #1a1a2e;
+      --navy-2: #16213e;
+      --green: #155724;
+      --green-bg: #d4edda;
+      --amber: #856404;
+      --amber-bg: #fff3cd;
+      --blue: #0c5460;
+      --blue-bg: #d1ecf1;
+      --red-bg: #f8d7da;
+      --gray-bg: #f8f9fa;
+      --text: #333;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #f4f5f7;
+      color: var(--text);
+    }
+    header {
+      background: linear-gradient(135deg, var(--navy), var(--navy-2));
+      color: #fff;
+      padding: 16px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 {
+      font-size: 15px;
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: .2px;
+    }
+    header p {
+      margin: 2px 0 0;
+      font-size: 10.5px;
+      color: #c7c9d9;
+    }
+    #refreshBtn {
+      background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.25);
+      color: #fff;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+    }
+    #refreshBtn:hover { background: rgba(255,255,255,.22); }
+    #refreshBtn:disabled { opacity: .6; cursor: default; }
+    .spin { display: inline-block; animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: #888;
+      font-weight: 700;
+      margin: 16px 14px 8px;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      padding: 0 14px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px 10px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.06);
+      border: 1px solid #eceef1;
+    }
+    .card .icon { font-size: 16px; }
+    .card .label {
+      font-size: 10.5px;
+      color: #777;
+      margin: 4px 0 2px;
+      line-height: 1.25;
+    }
+    .card .value {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--navy);
+    }
+    .card.green .value { color: var(--green); }
+    .card.amber .value { color: var(--amber); }
+    .card.blue  .value { color: var(--blue); }
+
+    .footer {
+      margin: 18px 14px 16px;
+      padding: 10px 12px;
+      background: #fff;
+      border: 1px dashed #ddd;
+      border-radius: 8px;
+      font-size: 11px;
+      color: #888;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #toast {
+      margin: 0 14px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 11.5px;
+      display: none;
+    }
+    #toast.ok   { display: block; background: var(--green-bg); color: var(--green); }
+    #toast.err  { display: block; background: var(--red-bg); color: #721c24; }
+
+    .skeleton {
+      background: linear-gradient(90deg, #eee 25%, #f5f5f5 37%, #eee 63%);
+      background-size: 400% 100%;
+      animation: shimmer 1.4s ease infinite;
+      border-radius: 6px;
+      height: 15px;
+      width: 60%;
+    }
+    @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+    /* Web App full-width (modo="webapp") — a sidebar (modo="sidebar") fica
+       igual a antes, já que o container narrow do Sheets nunca chega perto
+       do max-width abaixo. */
+    .page-container { max-width: 960px; margin: 0 auto; }
+
+    body.modo-webapp { background: #eef0f4; padding: 28px 20px 48px; }
+    body.modo-webapp header { border-radius: 14px; padding: 22px 26px; }
+    body.modo-webapp h1 { font-size: 20px; }
+    body.modo-webapp header p { font-size: 12px; }
+    body.modo-webapp .section-title { margin: 22px 4px 10px; font-size: 12px; }
+    body.modo-webapp .cards { padding: 0 4px; gap: 12px; }
+    body.modo-webapp .card { padding: 16px; border-radius: 12px; }
+    body.modo-webapp .card .icon { font-size: 20px; }
+    body.modo-webapp .card .value { font-size: 22px; }
+    body.modo-webapp .card .label { font-size: 12px; }
+    body.modo-webapp .footer { margin: 24px 4px 0; }
+  </style>
+</head>
+<body class="modo-<?= modo ?>">
+  <div class="page-container">
+    <? if (modo === 'webapp') { ?>
+      <?!= include('Nav', {pagina: 'dashboard'}) ?>
+    <? } ?>
+
+    <header>
+      <div>
+        <h1>BouwObra</h1>
+        <p>Painel de indicadores</p>
+      </div>
+      <button id="refreshBtn" onclick="atualizar()">
+        <span id="refreshIcon">↻</span> Atualizar
+      </button>
+    </header>
+
+    <div id="toast"></div>
+
+    <div class="section-title">Mercado Livre</div>
+    <div class="cards" id="cardsMl"></div>
+
+    <div class="section-title">Precificação</div>
+    <div class="cards" id="cardsPrec"></div>
+
+    <div class="footer">
+      <span>🕐 Última sincronização</span>
+      <strong id="timestamp">—</strong>
+    </div>
+  </div>
+
+  <script>
+    const CARD_DEFS_ML = [
+      { key: 'vendasBrutas',      icon: '📦', label: 'Vendas do Mês', prefix: 'R$ ', cls: 'blue' },
+      { key: 'pedidosHoje',       icon: '🛒', label: 'Pedidos Hoje',  cls: '' },
+      { key: 'pedidosMes',        icon: '📅', label: 'Pedidos no Mês', cls: '' },
+      { key: 'ticketMedio',       icon: '🎯', label: 'Ticket Médio',  prefix: 'R$ ', cls: 'blue' },
+      { key: 'anunciosAtivos',    icon: '✅', label: 'Anúncios Ativos', cls: 'green' },
+      { key: 'anunciosPausados',  icon: '⏸️', label: 'Anúncios Pausados', cls: 'amber' },
+    ];
+    const CARD_DEFS_PREC = [
+      { key: 'margemMedia', icon: '📊', label: 'Margem Média', suffix: '%', cls: 'green' },
+      { key: 'semCusto',    icon: '⚠️', label: 'Produtos sem Custo', cls: 'amber' },
+      { key: 'totalProd',   icon: '📝', label: 'Total de Produtos', cls: '' },
+    ];
+
+    function skeletonCards(defs, container) {
+      container.innerHTML = defs.map(() => `
+        <div class="card">
+          <div class="icon">&nbsp;</div>
+          <div class="skeleton"></div>
+        </div>`).join('');
+    }
+
+    function renderCards(defs, container, data) {
+      container.innerHTML = defs.map(d => `
+        <div class="card ${d.cls}">
+          <div class="icon">${d.icon}</div>
+          <div class="label">${d.label}</div>
+          <div class="value">${d.prefix || ''}${data[d.key]}${d.suffix || ''}</div>
+        </div>`).join('');
+    }
+
+    function showToast(msg, ok) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = ok ? 'ok' : 'err';
+      setTimeout(() => { t.className = ''; }, 4000);
+    }
+
+    function paint(data) {
+      renderCards(CARD_DEFS_ML, document.getElementById('cardsMl'), data);
+      renderCards(CARD_DEFS_PREC, document.getElementById('cardsPrec'), data);
+      document.getElementById('timestamp').textContent = data.timestamp;
+    }
+
+    function setLoading(loading) {
+      const btn = document.getElementById('refreshBtn');
+      const icon = document.getElementById('refreshIcon');
+      btn.disabled = loading;
+      icon.className = loading ? 'spin' : '';
+    }
+
+    function carregar() {
+      skeletonCards(CARD_DEFS_ML, document.getElementById('cardsMl'));
+      skeletonCards(CARD_DEFS_PREC, document.getElementById('cardsPrec'));
+      google.script.run
+        .withSuccessHandler(data => paint(data))
+        .withFailureHandler(e => showToast('Erro ao carregar: ' + e.message, false))
+        .getDashboardData();
+    }
+
+    function atualizar() {
+      setLoading(true);
+      google.script.run
+        .withSuccessHandler(data => {
+          paint(data);
+          setLoading(false);
+          showToast('✅ Dashboard atualizado!', true);
+        })
+        .withFailureHandler(e => {
+          setLoading(false);
+          showToast('Erro ao atualizar: ' + e.message, false);
+        })
+        .atualizarDashboardData();
+    }
+
+    carregar();
+  </script>
+</body>
+</html>

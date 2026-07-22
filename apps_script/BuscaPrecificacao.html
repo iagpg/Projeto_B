@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --navy: #1a1a2e;
+      --navy-2: #16213e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #f4f5f7;
+      color: #333;
+    }
+    header {
+      background: linear-gradient(135deg, var(--navy), var(--navy-2));
+      color: #fff;
+      padding: 14px 14px 16px;
+    }
+    header h1 {
+      font-size: 15px;
+      margin: 0 0 8px;
+      font-weight: 700;
+    }
+    .search-box {
+      position: relative;
+    }
+    .search-box input {
+      width: 100%;
+      padding: 9px 32px 9px 10px;
+      border-radius: 8px;
+      border: none;
+      font-size: 13px;
+      outline: none;
+    }
+    .search-box .clear {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+      color: #999;
+      font-size: 13px;
+      display: none;
+      background: none;
+      border: none;
+      padding: 4px;
+    }
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 14px;
+      font-size: 11px;
+      color: #777;
+    }
+    #refreshBtn {
+      border: none;
+      background: none;
+      color: #4a6cf7;
+      font-size: 11px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #list {
+      padding: 0 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .item {
+      background: #fff;
+      border: 1px solid #eceef1;
+      border-radius: 10px;
+      padding: 9px 10px;
+      cursor: pointer;
+      transition: box-shadow .15s, border-color .15s;
+    }
+    .item:hover {
+      box-shadow: 0 2px 6px rgba(0,0,0,.08);
+      border-color: #d6d9e0;
+    }
+    .item .top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .item .nome {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--navy);
+      line-height: 1.3;
+      flex: 1;
+    }
+    .item .margem {
+      font-size: 11.5px;
+      font-weight: 700;
+      white-space: nowrap;
+      padding: 2px 7px;
+      border-radius: 20px;
+    }
+    .margem.alta  { background: #d4edda; color: #155724; }
+    .margem.media { background: #fff3cd; color: #856404; }
+    .margem.baixa { background: #f8d7da; color: #721c24; }
+
+    .item .sub-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 5px;
+      font-size: 10.5px;
+      color: #888;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .item .sub-row span.mono {
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      background: #f1f2f5;
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+    .status-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 7px;
+      border-radius: 20px;
+    }
+    .status-Ativo   { background: #d4edda; color: #155724; }
+    .status-Pausado { background: #e2e3e5; color: #383d41; }
+    .status-Fechado { background: #f8d7da; color: #721c24; }
+    .status-Migrado { background: #cce5ff; color: #004085; }
+
+    /* Grupos (variações) ─────────────────────────────────────── */
+    .grupo { display: flex; flex-direction: column; gap: 6px; }
+    .grupo-header {
+      background: #f7f8fc;
+      border-color: #dfe2ea;
+    }
+    .grupo-header .chevron {
+      display: inline-block;
+      width: 14px;
+      color: #4a6cf7;
+      font-weight: 700;
+    }
+    .grupo-badge {
+      font-size: 10px;
+      font-weight: 600;
+      color: #4a6cf7;
+      background: #e8ecfd;
+      border-radius: 20px;
+      padding: 1px 7px;
+    }
+    .ver-planilha {
+      margin-left: auto;
+      color: #4a6cf7;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .ver-planilha:hover { text-decoration: underline; }
+    .filhos {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-left: 16px;
+      border-left: 2px solid #e8ecfd;
+      margin-left: 8px;
+    }
+    .item.filho { padding: 7px 9px; }
+    .item.filho .nome { font-size: 12px; font-weight: 500; }
+
+    .empty, .loading {
+      text-align: center;
+      color: #999;
+      font-size: 12px;
+      padding: 30px 14px;
+    }
+    .skeleton-item {
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid #eceef1;
+      padding: 10px;
+      margin: 0 10px 6px;
+    }
+    .skeleton-line {
+      height: 12px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #eee 25%, #f5f5f5 37%, #eee 63%);
+      background-size: 400% 100%;
+      animation: shimmer 1.4s ease infinite;
+      margin-bottom: 6px;
+    }
+    @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+    /* Web App full-width (modo="webapp") — a sidebar (modo="sidebar") fica
+       igual a antes, já que o container narrow do Sheets nunca chega perto
+       do max-width abaixo. */
+    .page-container { max-width: 640px; margin: 0 auto; }
+
+    body.modo-webapp { background: #eef0f4; padding: 28px 20px 48px; }
+    body.modo-webapp header { border-radius: 14px; padding: 18px 22px 20px; }
+    body.modo-webapp h1 { font-size: 18px; }
+    body.modo-webapp .meta-row { padding: 12px 4px; font-size: 12px; }
+    body.modo-webapp #list { padding: 0 4px 20px; gap: 8px; }
+    body.modo-webapp .item { padding: 12px 14px; }
+    body.modo-webapp .item .nome { font-size: 13.5px; }
+  </style>
+</head>
+<body class="modo-<?= modo ?>">
+  <div class="page-container">
+    <? if (modo === 'webapp') { ?>
+      <?!= include('Nav', {pagina: 'busca'}) ?>
+    <? } ?>
+
+    <header>
+      <h1>🔎 Buscar Produto</h1>
+      <div class="search-box">
+        <input id="searchInput" type="text" placeholder="Nome, código MLB ou SKU..." oninput="filtrar()" autofocus>
+        <button class="clear" id="clearBtn" onclick="limparBusca()">✕</button>
+      </div>
+    </header>
+
+    <div class="meta-row">
+      <span id="countLabel">Carregando...</span>
+      <button id="refreshBtn" onclick="carregar()">↻ Recarregar</button>
+    </div>
+
+    <div id="list"></div>
+  </div>
+
+  <script>
+    let todosProdutos = [];
+    const expandidos = new Set(); // familyId dos grupos abertos manualmente
+
+    function normalizar(s) {
+      return String(s || '')
+        .toLowerCase()
+        .normalize('NFD').replace(/[̀-ͯ]/g, ''); // remove acentos
+    }
+
+    function classeMargem(pct) {
+      if (pct >= 20) return 'alta';
+      if (pct >= 10) return 'media';
+      return 'baixa';
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function renderSkeleton(n) {
+      const list = document.getElementById('list');
+      let html = '';
+      for (let i = 0; i < n; i++) {
+        html += `<div class="skeleton-item">
+          <div class="skeleton-line" style="width:70%"></div>
+          <div class="skeleton-line" style="width:40%"></div>
+        </div>`;
+      }
+      list.innerHTML = html;
+    }
+
+    function renderProduto(p, extraClass) {
+      return `
+        <div class="item ${extraClass || ''}" data-action="ir" data-linha="${p.linha}">
+          <div class="top-row">
+            <div class="nome">${escapeHtml(p.nome)}</div>
+            <div class="margem ${classeMargem(p.margemPct)}">${p.margemPct.toFixed(1)}%</div>
+          </div>
+          <div class="sub-row">
+            ${p.mlbId ? `<span class="mono">${escapeHtml(p.mlbId)}</span>` : ''}
+            ${p.sku ? `<span class="mono">${escapeHtml(p.sku)}</span>` : ''}
+            ${p.status ? `<span class="status-badge status-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>` : ''}
+          </div>
+        </div>`;
+    }
+
+    function renderGrupo(p) {
+      const aberto = expandidos.has(p.familyId) || p._autoExpandir;
+      const filhosHtml = aberto
+        ? `<div class="filhos">${p.filhos.map(f => renderProduto(f, 'filho')).join('')}</div>`
+        : '';
+      return `
+        <div class="grupo">
+          <div class="item grupo-header" data-action="toggle" data-family="${escapeHtml(p.familyId)}">
+            <div class="top-row">
+              <div class="nome"><span class="chevron">${aberto ? '▾' : '▸'}</span>${escapeHtml(p.nome)}</div>
+              <div class="margem ${classeMargem(p.margemPct)}">${p.margemPct.toFixed(1)}% méd.</div>
+            </div>
+            <div class="sub-row">
+              <span class="grupo-badge">🧩 ${escapeHtml(p.sku)}</span>
+              ${p.status ? `<span class="status-badge status-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>` : ''}
+              <span class="ver-planilha" data-action="ir" data-linha="${p.linha}">Ver grupo na planilha ↗</span>
+            </div>
+          </div>
+          ${filhosHtml}
+        </div>`;
+    }
+
+    function renderLista(produtos) {
+      const list = document.getElementById('list');
+      if (!produtos.length) {
+        list.innerHTML = '<div class="empty">Nenhum produto encontrado.</div>';
+        return;
+      }
+      list.innerHTML = produtos.map(p => p.isGrupo ? renderGrupo(p) : renderProduto(p)).join('');
+    }
+
+    // Conta produtos "de verdade" (uma variação = um produto, um grupo não conta, só seus filhos)
+    function contarProdutos(lista) {
+      return lista.reduce((acc, p) => acc + (p.isGrupo ? p.filhos.length : 1), 0);
+    }
+
+    function itemBate(item, termo) {
+      return normalizar(item.nome).includes(termo) ||
+        normalizar(item.mlbId).includes(termo) ||
+        normalizar(item.sku).includes(termo);
+    }
+
+    function filtrar() {
+      const termoInput = document.getElementById('searchInput').value;
+      document.getElementById('clearBtn').style.display = termoInput ? 'block' : 'none';
+      const termo = normalizar(termoInput);
+
+      let filtrados;
+      if (!termo) {
+        filtrados = todosProdutos;
+      } else {
+        filtrados = todosProdutos.map(p => {
+          if (!p.isGrupo) return itemBate(p, termo) ? p : null;
+
+          const grupoBate = itemBate(p, termo);
+          const filhosBatem = p.filhos.filter(f => itemBate(f, termo));
+          if (!grupoBate && !filhosBatem.length) return null;
+
+          return Object.assign({}, p, {
+            filhos: grupoBate ? p.filhos : filhosBatem,
+            _autoExpandir: !grupoBate && filhosBatem.length > 0,
+          });
+        }).filter(Boolean);
+      }
+
+      const totalGeral = contarProdutos(todosProdutos);
+      document.getElementById('countLabel').textContent = termo
+        ? `${contarProdutos(filtrados)} de ${totalGeral} produtos`
+        : `${totalGeral} produtos`;
+
+      renderLista(filtrados);
+    }
+
+    function limparBusca() {
+      document.getElementById('searchInput').value = '';
+      document.getElementById('clearBtn').style.display = 'none';
+      filtrar();
+      document.getElementById('searchInput').focus();
+    }
+
+    function irPara(linha) {
+      google.script.run.irParaLinhaPrecificacao(linha);
+    }
+
+    function toggleGrupo(familyId) {
+      if (expandidos.has(familyId)) expandidos.delete(familyId);
+      else expandidos.add(familyId);
+      filtrar();
+    }
+
+    document.getElementById('list').addEventListener('click', e => {
+      const el = e.target.closest('[data-action]');
+      if (!el) return;
+      if (el.dataset.action === 'ir') irPara(Number(el.dataset.linha));
+      else if (el.dataset.action === 'toggle') toggleGrupo(el.dataset.family);
+    });
+
+    function carregar() {
+      document.getElementById('countLabel').textContent = 'Carregando...';
+      renderSkeleton(6);
+      google.script.run
+        .withSuccessHandler(produtos => {
+          todosProdutos = produtos;
+          filtrar();
+        })
+        .withFailureHandler(e => {
+          document.getElementById('list').innerHTML =
+            '<div class="empty">Erro ao carregar: ' + escapeHtml(e.message) + '</div>';
+          document.getElementById('countLabel').textContent = '';
+        })
+        .getPrecificacaoListaBusca();
+    }
+
+    carregar();
+  </script>
+</body>
+</html>

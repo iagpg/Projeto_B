@@ -12,7 +12,8 @@ function onOpen() {
     .addItem('↩️ Restaurar Preço Original (selecionadas)', 'restaurarPrecoOriginalSelecionadas')
     .addItem('🔍 Buscar NF (período/número)', 'mostrarDialogoBuscarNF')
     .addSeparator()
-    .addItem('Atualizar Dashboard', 'atualizarDashboard')
+    .addItem('📊 Ver Dashboard (painel)', 'mostrarDashboardSidebar')
+    .addItem('🔎 Buscar Produto (nome/MLB/SKU)', 'mostrarBuscaPrecificacaoSidebar')
     .addSeparator()
     .addSubMenu(
       SpreadsheetApp.getUi().createMenu('🔧 Diagnóstico')
@@ -51,14 +52,6 @@ function sincronizarTudo() {
   } catch (e) {
     ss.toast('⚠️ Erro na Precificação: ' + e.message, 'BouwObra', 8);
     Logger.log('Erro atualizarPrecificacao: ' + e.stack);
-    return;
-  }
-
-  try {
-    atualizarDashboard();
-  } catch (e) {
-    ss.toast('⚠️ Erro no Dashboard: ' + e.message, 'BouwObra', 8);
-    Logger.log('Erro atualizarDashboard: ' + e.stack);
     return;
   }
 
@@ -133,9 +126,10 @@ function testarVendasML() {
   });
   Logger.log('ORDERS RAW: ' + JSON.stringify(respMes));
 
-  // 3. Exibe resultado bruto na aba Dashboard para inspeção
-  let ws = ss.getSheetByName(ABA_DASHBOARD);
-  if (!ws) ws = ss.insertSheet(ABA_DASHBOARD);
+  // 3. Exibe resultado bruto numa aba própria de diagnóstico (não usa mais
+  // ABA_DASHBOARD — essa aba foi removida, o Dashboard agora é só o painel HTML)
+  let ws = ss.getSheetByName(ABA_DIAGNOSTICO);
+  if (!ws) ws = ss.insertSheet(ABA_DIAGNOSTICO);
   ws.getRange('A15:C25').clearContent();
   ws.getRange('A15').setValue('--- DIAGNÓSTICO ML ---');
   ws.getRange('A16').setValue('Usuário ML: ' + (user.nickname || user.id));
@@ -147,6 +141,22 @@ function testarVendasML() {
 
   const total = respMes.paging ? respMes.paging.total : 0;
   ss.toast('ML OK: ' + (user.nickname || userId) + ' | ' + total + ' pedidos no mês', 'BouwObra', 10);
+}
+
+// ── Limpeza única: aba "Dashboard" legada ─────────────────────────────────────
+//
+// O Dashboard virou 100% o painel HTML (06_Dashboard.gs) — essa aba parou de
+// ser escrita e só guarda a última tabela de KPIs congelada. Idempotente: não
+// dá erro se a aba já não existir (pode ser rodada mais de uma vez à toa).
+function removerAbaDashboardAntiga() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ws = ss.getSheetByName(ABA_DASHBOARD);
+  if (!ws) {
+    ss.toast('Aba "Dashboard" já não existe — nada a fazer.', 'BouwObra', 6);
+    return;
+  }
+  ss.deleteSheet(ws);
+  ss.toast('✅ Aba "Dashboard" (legada) removida.', 'BouwObra', 6);
 }
 
 // Roda no editor de script para testar autenticação Tiny

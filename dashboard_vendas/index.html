@@ -303,6 +303,7 @@
       <option value="dia">Hoje</option>
       <option value="semana">Últimos 7 dias</option>
       <option value="mes">Este mês</option>
+      <option value="3meses">Últimos 3 meses</option>
       <option value="especifico">Mês específico…</option>
     </select>
     <input type="month" id="input-mes" style="display:none;">
@@ -417,7 +418,7 @@
     $('btn-buscar').disabled = true;
     const rotuloFiltro = {
       todos: 'todo o histórico', dia: 'hoje', semana: 'últimos 7 dias',
-      mes: 'este mês', especifico: `mês ${mes}`,
+      mes: 'este mês', '3meses': 'últimos 3 meses', especifico: `mês ${mes}`,
     }[filtro] || filtro;
     setStatus(`<span class="spinner"></span> Buscando vendas de "${produto}" (${rotuloFiltro})... pode levar um tempo se for uma família grande.`);
 

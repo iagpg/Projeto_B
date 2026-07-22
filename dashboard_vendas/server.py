@@ -73,6 +73,15 @@ def _calcular_intervalo(filtro: str, mes: str = ""):
         inicio = agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         return _iso_ml(inicio), _iso_ml(agora)
 
+    if filtro == "3meses":
+        # 3 meses calendário cheios: mês atual + os 2 anteriores, desde o dia 1.
+        mes_alvo, ano_alvo = agora.month - 2, agora.year
+        while mes_alvo <= 0:
+            mes_alvo += 12
+            ano_alvo -= 1
+        inicio = datetime(ano_alvo, mes_alvo, 1)
+        return _iso_ml(inicio), _iso_ml(agora)
+
     if filtro == "especifico":
         try:
             ano, m = (int(x) for x in mes.split("-"))

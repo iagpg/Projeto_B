@@ -240,6 +240,12 @@ function _coresParaLinha(row, uncertainColsRow) {
   const corStatus = _STATUS_CORES[row[STATUS_COL_IDX]];
   if (corStatus) linha[STATUS_COL_IDX] = corStatus;
 
+  // Taxa ML (%) — abaixo de 14% costuma ser Clássico (~12%), acima costuma
+  // ser Premium (~17%+). Cor só pra identificar visualmente qual faixa,
+  // sem precisar de uma coluna extra pro tipo de anúncio.
+  const taxaPct = parseFloat(row[6]) || 0; // G
+  linha[6] = taxaPct < 14 ? '#ffe0b2' : '#bbdefb';
+
   (uncertainColsRow || []).forEach(col => { linha[col] = '#ffa500'; });
 
   return linha;

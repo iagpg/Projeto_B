@@ -397,7 +397,8 @@ Google Apps Script — sem executar código local.
 5. Executar a função **`inicializarConfiguracoes`** (uma vez): gravar tokens ML e Tiny
 6. Executar **`atualizarCacheNF`** para popular o cache de custos das NFs Tiny
 7. Executar **`sincronizarTudo`** ou usar o menu **BouwObra → Sincronizar Tudo**
-8. Opcional: **BouwObra → Instalar Trigger Diário** para sync automático às 6h
+8. Opcional: **BouwObra → Configurar Trigger Diário** para escolher horário e
+   quais tarefas rodam sozinhas todo dia (buscar NF novas / sincronizar Precificação)
 
 ### Funções disponíveis no menu BouwObra
 
@@ -410,7 +411,8 @@ Google Apps Script — sem executar código local.
 | `atualizarDashboard` | Busca KPIs ML e grava aba Dashboard |
 | `inicializarConfiguracoes` | Grava client_id/client_secret/user_id nas propriedades do script (rodar 1×, ou se trocar de app) |
 | `autorizarML` / `autorizarTiny` | Autorização OAuth2 inicial direto na planilha — gera o link, você cola o code retornado (ver `08_Autorizacao.gs`) |
-| `instalarTriggerDiario` | Agenda sync automático diário às 6h |
+| `mostrarDialogoConfigTrigger` | Painel de configuração do trigger diário — horário + liga/desliga por tarefa (guardado nas propriedades do script, ver `07_Menu.gs`) |
+| `buscarNfNovasDoDia` | Chamado pelo trigger diário — acha a maior "NF Data" já cacheada e busca NFs até hoje, em lotes de 100 encadeados automaticamente |
 | `testarConexaoML` | Diagnóstico: testa token ML |
 | `testarConexaoTiny` | Diagnóstico: testa token Tiny |
 
@@ -426,6 +428,44 @@ Aba separada da Precificação — que é reescrita do zero a cada sync, então 
   "+"/"−" na lateral esquerda da planilha pra expandir/recolher.
 
 Depois de colar, rode pelo menu **BouwObra → ➕ Adicionar Anúncio**.
+
+---
+
+## Análise de Vendas (local)
+
+### `dashboard_vendas/server.py`
+Painel local (única dependência extra: `openpyxl`, já usada no resto do
+projeto) pra analisar vendas de um produto ou família de variações do
+Mercado Livre. Cada busca **soma** à lista em vez de substituir — dá pra
+combinar vários produtos diferentes numa mesma análise. Não cruza com custo
+(Cache NF) — só dados brutos de venda (preço, taxa ML, quantidade, status)
+por pedido. Chamadas ao ML paralelizadas (`_MAX_WORKERS=8`) — família de 64
+itens caiu de 146s pra ~33s.
+
+```bash
+python dashboard_vendas/server.py
+# abre http://localhost:8765 automaticamente
+```
+
+**Aceita na busca:**
+- **MLB ID** (ex: `MLB4551359415`) → vendas só desse anúncio.
+- **Family ID** (14+ dígitos, ex: `5135813632757073`) → resolve todas as
+  variações (`user_products_ids`) e soma as vendas de **todos** os item_ids
+  de cada uma — inclusive anúncios fechados/migrados, onde o histórico de
+  venda muitas vezes fica (o anúncio ativo pode mostrar 0 vendas mesmo tendo
+  vendido bastante antes de ser migrado).
+
+**Filtro de período** (aplicado direto na chamada ao ML, não busca tudo pra
+filtrar depois): Todos · Hoje · Últimos 7 dias · Este mês · Mês específico
+(limitado aos últimos 3 meses, incluindo o atual).
+
+**Exportar:** botão "⬇ Baixar Excel" no final da tabela — gera um `.xlsx`
+real (via `openpyxl`) com tudo que estiver acumulado na lista.
+
+**Tarifa de envio:** cada pedido traz também o frete cobrado do vendedor
+("Mercado Envios, por sua conta") via `GET /shipments/{id}/costs` — bate
+com a tela de detalhe do pedido no próprio ML. Custa 1 chamada extra por
+pedido (deduplicada por `shipping.id` e paralelizada).
 
 ---
 

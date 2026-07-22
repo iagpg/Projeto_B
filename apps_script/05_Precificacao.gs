@@ -267,3 +267,79 @@ function _formatarColunas(ws, nRows) {
   ws.setColumnWidth(4, 120);  // D Categoria
   ws.autoResizeColumns(23, 2);// W..X (Status, Última Atualização)
 }
+
+// ── Suporte ao sidebar HTML de busca (BuscaPrecificacao.html) ────────────────
+
+function mostrarBuscaPrecificacaoSidebar() {
+  const tmpl = HtmlService.createTemplateFromFile('BuscaPrecificacao');
+  tmpl.modo = 'sidebar';
+  const html = tmpl.evaluate().setTitle('🔍 Buscar Produto');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+// Lê a aba Precificação já sincronizada e devolve uma lista enxuta para o
+// sidebar filtrar no cliente por nome, MLB ou SKU (sem recalcular nada).
+//
+// Reconhece os blocos "GRUPO {familyId}" gravados por 09_AdicionarAnuncio.gs
+// (linha pai com a média das variações + linhas de variação logo abaixo,
+// nativamente agrupadas via shiftRowGroupDepth) e devolve o pai com um
+// array `filhos` — o sidebar exibe isso como um item expansível, igual ao
+// [+]/[-] que já existe no próprio Sheets para esses blocos.
+function getPrecificacaoListaBusca() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ws = ss.getSheetByName(ABA_PRECIFICACAO);
+  if (!ws || ws.getLastRow() < 2) return [];
+
+  const nRows = ws.getLastRow() - 1;
+  const dados = ws.getRange(2, 1, nRows, HEADERS_PREC.length).getValues();
+
+  const paraItem = (row, linha) => ({
+    linha,                                       // linha real na planilha (1-based)
+    mlbId: String(row[0] || ''),                 // A
+    sku: String(row[1] || ''),                   // B
+    nome: String(row[2] || ''),                  // C
+    categoria: String(row[3] || ''),              // D
+    precoPraticado: Number(row[5]) || 0,          // F
+    margemPct: Number(row[MARGEM_COL_IDX]) || 0,  // V
+    status: String(row[STATUS_COL_IDX] || ''),    // W
+  });
+
+  const resultado = [];
+  let i = 0;
+  while (i < dados.length) {
+    const linha = i + 2;
+    const row = dados[i];
+    const colA = String(row[0] || '');
+
+    if (colA.startsWith('GRUPO ')) {
+      const pai = paraItem(row, linha);
+      pai.isGrupo = true;
+      pai.familyId = colA.replace('GRUPO ', '').trim();
+      pai.filhos = [];
+
+      let j = i + 1;
+      while (j < dados.length && ws.getRowGroupDepth(j + 2) >= 1) {
+        pai.filhos.push(paraItem(dados[j], j + 2));
+        j++;
+      }
+      resultado.push(pai);
+      i = j;
+    } else {
+      resultado.push(paraItem(row, linha));
+      i++;
+    }
+  }
+  return resultado;
+}
+
+// Chamado ao clicar num resultado do sidebar — ativa a aba Precificação e
+// seleciona a linha correspondente para o usuário ver o produto na planilha.
+function irParaLinhaPrecificacao(linha) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ws = ss.getSheetByName(ABA_PRECIFICACAO);
+  if (!ws) return;
+  ss.setActiveSheet(ws);
+  const range = ws.getRange(linha, 1, 1, HEADERS_PREC.length);
+  ws.setActiveRange(range);
+  SpreadsheetApp.flush();
+}

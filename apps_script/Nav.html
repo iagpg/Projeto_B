@@ -1,0 +1,24 @@
+<style>
+  .bo-nav {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 16px;
+  }
+  .bo-nav a {
+    flex: 0 0 auto;
+    color: var(--navy, #1a1a2e);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 16px;
+    border-radius: 20px;
+    background: #fff;
+    border: 1px solid #e2e4ea;
+  }
+  .bo-nav a.ativo { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+  .bo-nav a:hover { border-color: #b9bdc9; }
+</style>
+<div class="bo-nav">
+  <a class="<?= pagina === 'dashboard' ? 'ativo' : '' ?>" href="?page=dashboard">📊 Dashboard</a>
+  <a class="<?= pagina === 'busca' ? 'ativo' : '' ?>" href="?page=busca">🔎 Buscar Produto</a>
+</div>

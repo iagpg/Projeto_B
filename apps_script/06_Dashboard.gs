@@ -1,16 +1,32 @@
 // ============================================================
-// 06_Dashboard.gs — KPIs e escrita da aba Dashboard
+// 06_Dashboard.gs — KPIs do Dashboard
 // ============================================================
+//
+// O Dashboard não escreve mais numa aba da planilha — o painel HTML
+// (Dashboard.html, aberto via mostrarDashboardSidebar) é a única forma de
+// visualização, sempre computado ao vivo a partir dos pedidos/anúncios ML
+// e da aba Precificação.
 
-function atualizarDashboard() {
+const _DASHBOARD_CACHE_KEY = 'dashboardKpis_v1';
+const _DASHBOARD_CACHE_TTL = 300; // 5 min — getStatusAnuncios() pagina TODOS os anúncios,
+                                   // sem isso cada abertura do painel batia na API do zero.
+
+// Calcula os KPIs crus (números), usado pelo sidebar HTML. Cacheado por
+// _DASHBOARD_CACHE_TTL segundos pra não estourar a cota diária de UrlFetch
+// só de abrir/recarregar o painel repetidas vezes — passe forcar=true (usado
+// pelo botão "Atualizar") pra ignorar o cache e recalcular na hora.
+function _calcularKpisDashboard(forcar) {
+  const cache = CacheService.getScriptCache();
+  if (!forcar) {
+    const cached = cache.get(_DASHBOARD_CACHE_KEY);
+    if (cached) return JSON.parse(cached);
+  }
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.toast('Atualizando Dashboard...', 'BouwObra', -1);
 
-  // ── KPIs de pedidos ML ────────────────────────────────────
   const kpis   = getKpisPedidos();
   const status = getStatusAnuncios();
 
-  // ── KPIs da aba Precificação (lê o que já foi gravado) ────
   let margemMedia = 0, semCusto = 0, totalProd = 0;
   const wsPr = ss.getSheetByName(ABA_PRECIFICACAO);
   if (wsPr && wsPr.getLastRow() > 1) {
@@ -26,85 +42,55 @@ function atualizarDashboard() {
     margemMedia = countM > 0 ? Math.round(somaM / countM * 100) / 100 : 0;
   }
 
-  const timestamp = new Date().toLocaleString('pt-BR');
+  const resultado = {
+    vendasBrutas: kpis.vendasBrutas,
+    pedidosHoje: kpis.pedidosHoje,
+    pedidosMes: kpis.pedidosMes,
+    ticketMedio: kpis.ticketMedio,
+    anunciosAtivos: status.active,
+    anunciosPausados: status.paused,
+    margemMedia, semCusto, totalProd,
+    timestamp: new Date().toLocaleString('pt-BR'),
+  };
 
-  // ── Dados do Dashboard ────────────────────────────────────
-  const kpiData = [
-    ['📦 Vendas do Mês',             'Mercado Livre',      'R$ ' + _fmt(kpis.vendasBrutas)],
-    ['🛒 Pedidos Hoje',              'Mercado Livre',      kpis.pedidosHoje],
-    ['📅 Pedidos no Mês',            'Mercado Livre',      kpis.pedidosMes],
-    ['🎯 Ticket Médio',              'Mercado Livre',      'R$ ' + _fmt(kpis.ticketMedio)],
-    ['✅ Anúncios Ativos',           'Mercado Livre',      status.active],
-    ['⏸️ Anúncios Pausados',         'Mercado Livre',      status.paused],
-    ['📊 Margem Média',              'Precificação',       _fmt(margemMedia) + '%'],
-    ['⚠️ Produtos sem Custo',        'Precificação',       semCusto],
-    ['📝 Total de Produtos',         'Precificação',       totalProd],
-    ['🕐 Última Sincronização',      'Sistema',            timestamp],
-  ];
+  cache.put(_DASHBOARD_CACHE_KEY, JSON.stringify(resultado), _DASHBOARD_CACHE_TTL);
+  return resultado;
+}
 
-  // ── Grava na aba Dashboard ────────────────────────────────
-  let ws = ss.getSheetByName(ABA_DASHBOARD);
-  if (!ws) ws = ss.insertSheet(ABA_DASHBOARD);
-  ws.clearContents();
-  ws.clearFormats();
+// ── Suporte ao sidebar HTML (Dashboard.html) ──────────────────────────────
 
-  _escreverDashboard(ws, kpiData);
+function mostrarDashboardSidebar() {
+  const tmpl = HtmlService.createTemplateFromFile('Dashboard');
+  tmpl.modo = 'sidebar';
+  const html = tmpl.evaluate().setTitle('📊 Dashboard BouwObra');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
 
-  ss.toast('✅ Dashboard atualizado!', 'BouwObra', 5);
+// Chamado pelo sidebar/web app ao carregar — usa o cache de 5 min se existir.
+function getDashboardData() {
+  return _formatarKpisParaSidebar(_calcularKpisDashboard(false));
+}
+
+// Chamado pelo botão "Atualizar" — ignora o cache e recalcula na hora.
+function atualizarDashboardData() {
+  return _formatarKpisParaSidebar(_calcularKpisDashboard(true));
+}
+
+function _formatarKpisParaSidebar(k) {
+  return {
+    vendasBrutas: _fmt(k.vendasBrutas),
+    pedidosHoje: k.pedidosHoje,
+    pedidosMes: k.pedidosMes,
+    ticketMedio: _fmt(k.ticketMedio),
+    anunciosAtivos: k.anunciosAtivos,
+    anunciosPausados: k.anunciosPausados,
+    margemMedia: _fmt(k.margemMedia),
+    semCusto: k.semCusto,
+    totalProd: k.totalProd,
+    timestamp: k.timestamp,
+  };
 }
 
 function _fmt(v) {
   return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function _escreverDashboard(ws, kpiData) {
-  // Título
-  const tRange = ws.getRange(1, 1, 1, 3);
-  tRange.merge();
-  tRange.setValue('BouwObra — Plataforma de Gestão');
-  tRange.setBackground('#1a1a2e');
-  tRange.setFontColor('#ffffff');
-  tRange.setFontSize(16);
-  tRange.setFontWeight('bold');
-  tRange.setHorizontalAlignment('center');
-  tRange.setVerticalAlignment('middle');
-  ws.setRowHeight(1, 48);
-
-  // Sub-título de colunas
-  const headers = ['KPI', 'Fonte', 'Valor'];
-  const hdr = ws.getRange(2, 1, 1, 3);
-  hdr.setValues([headers]);
-  hdr.setBackground('#16213e');
-  hdr.setFontColor('#e0e0e0');
-  hdr.setFontWeight('bold');
-  hdr.setHorizontalAlignment('center');
-
-  // Dados
-  ws.getRange(3, 1, kpiData.length, 3).setValues(kpiData);
-
-  // Coloração alternada + destaque de valor
-  kpiData.forEach((_, i) => {
-    const row = i + 3;
-    const bg  = i % 2 === 0 ? '#f8f9fa' : '#ffffff';
-    ws.getRange(row, 1, 1, 2).setBackground(bg).setFontColor('#333333');
-    const valRange = ws.getRange(row, 3);
-    valRange.setBackground(bg).setFontWeight('bold').setFontSize(12);
-    // Cor especial para KPIs financeiros
-    const label = String(kpiData[i][0]);
-    if (label.includes('Margem')) valRange.setFontColor('#155724');
-    else if (label.includes('sem Custo') || label.includes('Pausados')) valRange.setFontColor('#856404');
-    else if (label.includes('Vendas') || label.includes('Ticket')) valRange.setFontColor('#0c5460');
-    else valRange.setFontColor('#1a1a2e');
-  });
-
-  // Bordas
-  ws.getRange(2, 1, kpiData.length + 1, 3).setBorder(
-    true, true, true, true, true, true,
-    '#dee2e6', SpreadsheetApp.BorderStyle.SOLID
-  );
-
-  // Largura de colunas
-  ws.setColumnWidth(1, 260);
-  ws.setColumnWidth(2, 150);
-  ws.setColumnWidth(3, 200);
 }

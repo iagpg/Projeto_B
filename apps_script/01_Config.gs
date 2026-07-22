@@ -26,8 +26,9 @@ const ML_TAXA_DEFAULT = 12.0;
 
 // Nomes das abas
 const ABA_PRECIFICACAO = 'Precificação';
-const ABA_DASHBOARD    = 'Dashboard';
+const ABA_DASHBOARD    = 'Dashboard';        // legado — não é mais escrita, ver 06_Dashboard.gs
 const ABA_CACHE_NF     = 'Cache NF';       // aba oculta
+const ABA_DIAGNOSTICO  = '_Diagnóstico';   // dump bruto de testarVendasML()
 
 // Cabeçalhos da aba Precificação
 const HEADERS_PREC = [

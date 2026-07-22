@@ -383,14 +383,16 @@ function processarBuscarNFDialog(desde, ate, numero) {
 // continuar numa próxima chamada (a gravação é merge, então nada se perde).
 const _MAX_NF_POR_EXECUCAO = 100;
 
-function buscarNfPersonalizado(dataInicio, dataFim, numero) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const label = numero ? `NF ${numero}` : `${dataInicio || '...'} até ${dataFim || 'hoje'}`;
-  ss.toast(`Buscando ${label}...`, 'BouwObra', -1);
-
-  let nfHeaders = _listarNfIds(null, dataInicio, dataFim, numero);
+// Processa 1 lote (até _MAX_NF_POR_EXECUCAO NFs, as mais antigas do período) e
+// grava (merge). Devolve dado estruturado -- usado tanto pelo diálogo manual
+// (buscarNfPersonalizado, que formata como mensagem pro usuário) quanto pelo
+// trigger diário automático (que precisa saber programaticamente se sobrou
+// NF e a partir de qual data continuar, pra encadear os lotes sozinho, sem
+// ninguém clicando "rodar de novo").
+function _processarLoteNF(dataInicio, dataFim, numero, ss) {
+  const nfHeaders = _listarNfIds(null, dataInicio, dataFim, numero);
   if (!nfHeaders.length) {
-    return `❌ Nenhuma NF encontrada para ${label}.`;
+    return { encontradas: 0, processadas: 0, skus: 0, totalCache: 0, restante: false, ultimaData: null };
   }
 
   nfHeaders.sort((a, b) => (a.data || '').localeCompare(b.data || ''));
@@ -398,20 +400,88 @@ function buscarNfPersonalizado(dataInicio, dataFim, numero) {
   const restante = totalEncontradas > _MAX_NF_POR_EXECUCAO;
   const lote = restante ? nfHeaders.slice(0, _MAX_NF_POR_EXECUCAO) : nfHeaders;
 
-  ss.toast(`${lote.length}/${totalEncontradas} NF(s). Buscando itens...`, 'BouwObra', -1);
-
   const costMap = _processarNfHeaders(lote, ss);
   const final = _gravarCacheNF(costMap, true);
 
-  if (!restante) {
-    return `✅ ${label}: ${lote.length} NF(s) lida(s), ${Object.keys(costMap).length} SKU(s) processado(s) `
-         + `(${Object.keys(final).length} no cache total agora).`;
+  return {
+    encontradas: totalEncontradas,
+    processadas: lote.length,
+    skus: Object.keys(costMap).length,
+    totalCache: Object.keys(final).length,
+    restante,
+    ultimaData: lote[lote.length - 1].data,
+  };
+}
+
+function buscarNfPersonalizado(dataInicio, dataFim, numero) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const label = numero ? `NF ${numero}` : `${dataInicio || '...'} até ${dataFim || 'hoje'}`;
+  ss.toast(`Buscando ${label}...`, 'BouwObra', -1);
+
+  const r = _processarLoteNF(dataInicio, dataFim, numero, ss);
+  if (r.encontradas === 0) {
+    return `❌ Nenhuma NF encontrada para ${label}.`;
   }
 
-  const ultimaData = lote[lote.length - 1].data;
-  return `⚠️ Período grande (${totalEncontradas} NFs) — processei as ${lote.length} mais antigas (até ${ultimaData}). `
-       + `${Object.keys(costMap).length} SKU(s) atualizados agora (${Object.keys(final).length} no cache total). `
-       + `Rode de novo com início ${ultimaData} até ${dataFim || 'hoje'} para continuar o restante.`;
+  if (!r.restante) {
+    return `✅ ${label}: ${r.processadas} NF(s) lida(s), ${r.skus} SKU(s) processado(s) `
+         + `(${r.totalCache} no cache total agora).`;
+  }
+
+  return `⚠️ Período grande (${r.encontradas} NFs) — processei as ${r.processadas} mais antigas (até ${r.ultimaData}). `
+       + `${r.skus} SKU(s) atualizados agora (${r.totalCache} no cache total). `
+       + `Rode de novo com início ${r.ultimaData} até ${dataFim || 'hoje'} para continuar o restante.`;
+}
+
+// ── Busca diária automática (trigger) ──────────────────────────────────────────
+//
+// Acha a data mais recente já cacheada (maior "NF Data" entre todos os SKUs
+// da aba Cache NF) e busca NFs dessa data até hoje, encadeando os lotes de
+// _MAX_NF_POR_EXECUCAO sozinho dentro da mesma execução (diferente do diálogo
+// manual, aqui não tem ninguém pra clicar "rodar de novo"). Pára com margem
+// de segurança antes do limite de 6 min do Apps Script -- se sobrar NF, a
+// próxima execução do trigger continua de onde parou (a data mais recente
+// cacheada vai ter avançado, então não reprocessa do zero).
+const _TEMPO_LIMITE_TRIGGER_MS = 5 * 60 * 1000;
+
+function _ultimaDataCacheNF() {
+  const cache = lerCacheNF();
+  let maior = '';
+  Object.values(cache).forEach(c => {
+    if (c.nfData && c.nfData > maior) maior = c.nfData;
+  });
+  return maior;
+}
+
+function buscarNfNovasDoDia() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const inicioExecucao = new Date().getTime();
+  const hojeStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'America/Sao_Paulo', 'yyyy-MM-dd');
+
+  let desde = _ultimaDataCacheNF() || hojeStr;
+  let totalProcessadas = 0, totalSkus = 0, lotes = 0, encontradasUltimoLote = 0;
+
+  while (true) {
+    if (new Date().getTime() - inicioExecucao > _TEMPO_LIMITE_TRIGGER_MS) {
+      Logger.log(`buscarNfNovasDoDia: parou por tempo (${lotes} lote(s)) -- continua de ${desde} na próxima execução.`);
+      break;
+    }
+
+    const r = _processarLoteNF(desde, hojeStr, null, ss);
+    lotes++;
+    encontradasUltimoLote = r.encontradas;
+    if (r.encontradas === 0) break;
+
+    totalProcessadas += r.processadas;
+    totalSkus += r.skus;
+    if (!r.restante) break;
+    desde = r.ultimaData; // encadeia o próximo lote a partir daqui, sem intervenção manual
+  }
+
+  const msg = `Busca diária de NF (${desde} até ${hojeStr}): ${totalProcessadas} NF(s) processada(s) `
+            + `em ${lotes} lote(s), ${totalSkus} SKU(s) atualizados.`;
+  Logger.log(msg);
+  return msg;
 }
 
 // Lê o cache já gravado (rápido, sem chamada de API)

@@ -28,7 +28,7 @@ function onOpen() {
     )
     .addSeparator()
     .addItem('⚙️ Inicializar Configurações', 'inicializarConfiguracoes')
-    .addItem('🔑 Instalar Trigger Diário',   'instalarTriggerDiario')
+    .addItem('🕐 Configurar Trigger Diário', 'mostrarDialogoConfigTrigger')
     .addItem('🗑️ Remover Trigger Diário',    'removerTriggerDiario')
     .addToUi();
 }
@@ -59,28 +59,125 @@ function sincronizarTudo() {
 }
 
 // ── Trigger automático diário ─────────────────────────────────────────────────
+//
+// Painel de configuração (diálogo) em vez de um "instalar" com hora fixa:
+// escolhe o horário e quais tarefas rodam (guardado nas propriedades do
+// script). O handler do trigger é sempre executarTriggerDiario(), que lê
+// essa config e decide o que chamar -- então trocar a config não exige
+// reinstalar o trigger, só resalvar.
 
-function instalarTriggerDiario() {
-  // Remove triggers existentes para evitar duplicatas
-  removerTriggerDiario();
+function _configTriggerAtual() {
+  const props = getProps();
+  const trigger = ScriptApp.getProjectTriggers()
+    .find(t => t.getHandlerFunction() === 'executarTriggerDiario' && t.getEventType() === ScriptApp.EventType.CLOCK);
+  return {
+    ativo: !!trigger,
+    hora: parseInt(props.getProperty('TRIGGER_HORA') || '6', 10),
+    buscarNF: props.getProperty('TRIGGER_BUSCAR_NF') !== 'false',       // default ativado
+    syncPrecificacao: props.getProperty('TRIGGER_SYNC_PRECIFICACAO') !== 'false', // default ativado
+  };
+}
 
-  ScriptApp.newTrigger('sincronizarTudo')
-    .timeBased()
-    .everyDays(1)
-    .atHour(6)          // 06:00 no fuso do script (America/Sao_Paulo configurar no projeto)
-    .create();
+function mostrarDialogoConfigTrigger() {
+  const cfg = _configTriggerAtual();
+  const html = `
+    <div style="font-family: Arial, sans-serif; font-size: 13px; padding: 4px;">
+      <p><b>Status atual:</b> ${cfg.ativo ? `✅ ativo, às ${cfg.hora}h` : '⚪ inativo'}</p>
+      <p>
+        Horário (0-23):<br>
+        <input type="number" id="hora" min="0" max="23" value="${cfg.hora}" style="width: 60px; padding: 4px;">
+      </p>
+      <p>
+        <label><input type="checkbox" id="buscarNF" ${cfg.buscarNF ? 'checked' : ''}>
+          🔍 Buscar NFs novas (desde o último dia cacheado até hoje)</label><br>
+        <label><input type="checkbox" id="syncPrec" ${cfg.syncPrecificacao ? 'checked' : ''}>
+          💰 Sincronizar Precificação</label>
+      </p>
+      <button onclick="salvar()">Salvar e Ativar</button>
+      <button onclick="desativar()" style="margin-left: 6px;">Desativar</button>
+      <p id="resultado" style="color: #333; font-weight: bold;"></p>
+    </div>
+    <script>
+      function salvar() {
+        const hora = document.getElementById('hora').value;
+        const buscarNF = document.getElementById('buscarNF').checked;
+        const syncPrec = document.getElementById('syncPrec').checked;
+        document.getElementById('resultado').innerText = 'Salvando...';
+        google.script.run
+          .withSuccessHandler(function(msg) { document.getElementById('resultado').innerText = msg; })
+          .withFailureHandler(function(err) { document.getElementById('resultado').innerText = 'Erro: ' + err.message; })
+          .processarConfigTriggerDialog(hora, buscarNF, syncPrec);
+      }
+      function desativar() {
+        document.getElementById('resultado').innerText = 'Desativando...';
+        google.script.run
+          .withSuccessHandler(function(msg) { document.getElementById('resultado').innerText = msg; })
+          .withFailureHandler(function(err) { document.getElementById('resultado').innerText = 'Erro: ' + err.message; })
+          .removerTriggerDiario();
+      }
+    </script>
+  `;
+  const output = HtmlService.createHtmlOutput(html).setWidth(420).setHeight(280);
+  SpreadsheetApp.getUi().showModalDialog(output, 'Configurar Trigger Diário');
+}
 
-  SpreadsheetApp.getActiveSpreadsheet()
-    .toast('✅ Trigger diário instalado: sincronização às 6h.', 'BouwObra', 6);
+function processarConfigTriggerDialog(hora, buscarNF, syncPrec) {
+  try {
+    const h = parseInt(hora, 10);
+    if (isNaN(h) || h < 0 || h > 23) return '❌ Horário inválido (use 0-23).';
+
+    getProps().setProperties({
+      'TRIGGER_HORA': String(h),
+      'TRIGGER_BUSCAR_NF': String(!!buscarNF),
+      'TRIGGER_SYNC_PRECIFICACAO': String(!!syncPrec),
+    });
+
+    removerTriggerDiario();
+    ScriptApp.newTrigger('executarTriggerDiario')
+      .timeBased()
+      .everyDays(1)
+      .atHour(h)
+      .create();
+
+    const tarefas = [];
+    if (buscarNF) tarefas.push('Buscar NFs novas');
+    if (syncPrec) tarefas.push('Sincronizar Precificação');
+    return `✅ Trigger diário ativado às ${h}h. Tarefas: ${tarefas.length ? tarefas.join(', ') : 'nenhuma selecionada'}.`;
+  } catch (e) {
+    Logger.log('Erro processarConfigTriggerDialog: ' + e.stack);
+    return '❌ Erro: ' + e.message;
+  }
 }
 
 function removerTriggerDiario() {
   ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'sincronizarTudo')
+    .filter(t => t.getHandlerFunction() === 'sincronizarTudo' || t.getHandlerFunction() === 'executarTriggerDiario')
     .forEach(t => ScriptApp.deleteTrigger(t));
 
-  SpreadsheetApp.getActiveSpreadsheet()
-    .toast('Trigger diário removido.', 'BouwObra', 4);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Trigger diário removido.', 'BouwObra', 4);
+  return '🗑️ Trigger diário removido.';
+}
+
+// Handler chamado pelo trigger instalado -- lê a config salva e decide o que
+// rodar. Cada tarefa é isolada (erro numa não impede a outra).
+function executarTriggerDiario() {
+  const cfg = _configTriggerAtual();
+
+  if (cfg.buscarNF) {
+    try {
+      buscarNfNovasDoDia();
+    } catch (e) {
+      Logger.log('Erro buscarNfNovasDoDia (trigger diário): ' + e.stack);
+    }
+  }
+
+  if (cfg.syncPrecificacao) {
+    try {
+      atualizarPrecificacao();
+    } catch (e) {
+      Logger.log('Erro atualizarPrecificacao (trigger diário): ' + e.stack);
+    }
+  }
 }
 
 

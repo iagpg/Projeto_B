@@ -467,6 +467,13 @@ real (via `openpyxl`) com tudo que estiver acumulado na lista.
 com a tela de detalhe do pedido no próprio ML. Custa 1 chamada extra por
 pedido (deduplicada por `shipping.id` e paralelizada).
 
+**Pacotes (múltiplos pedidos, 1 envio só):** quando um comprador leva produtos
+diferentes no mesmo carrinho, o ML cria um pedido separado por produto,
+todos compartilhando o mesmo `pack_id` e o mesmo envio. A coluna "Pacote"
+mostra isso (com selo 📦 quando há mais de 1 pedido no mesmo pacote na lista
+atual) — e o resumo/soma de frete deduplica por `shipping_id`, senão contaria
+o mesmo frete 2x por engano.
+
 ---
 
 *Atualizado sempre que um novo script é criado.*

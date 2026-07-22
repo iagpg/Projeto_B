@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard de Vendas — BouwObra</title>
+<style>
+  :root {
+    --bg: #f6f5f1;
+    --panel: #ffffff;
+    --ink: #1e2023;
+    --ink-soft: #6b6f66;
+    --border: #dfdcd3;
+    --border-strong: #c8c4b6;
+    --accent: #a8790a;
+    --accent-soft: #f3e6c8;
+    --accent-ink: #5c4306;
+    --row-alt: #f0eee7;
+    --ok: #2e7d4f;
+    --ok-bg: #e2f0e6;
+    --bad: #b3261e;
+    --bad-bg: #f7e2e0;
+    --neutral: #6b7280;
+    --neutral-bg: #eaeaea;
+    --shadow: 0 1px 3px rgba(30, 32, 35, 0.08);
+
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-data: ui-monospace, "SF Mono", "Cascadia Mono", "Consolas", "Roboto Mono", "DejaVu Sans Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a;
+      --panel: #1c2024;
+      --ink: #e7e5df;
+      --ink-soft: #9a9d95;
+      --border: #2b3034;
+      --border-strong: #3a4046;
+      --accent: #d9a53b;
+      --accent-soft: #3a3120;
+      --accent-ink: #f2d18c;
+      --row-alt: #202428;
+      --ok: #4caf6f;
+      --ok-bg: #1c3327;
+      --bad: #e57373;
+      --bad-bg: #3a2222;
+      --neutral: #9aa1ab;
+      --neutral-bg: #26292c;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171a; --panel: #1c2024; --ink: #e7e5df; --ink-soft: #9a9d95;
+    --border: #2b3034; --border-strong: #3a4046; --accent: #d9a53b; --accent-soft: #3a3120; --accent-ink: #f2d18c;
+    --row-alt: #202428; --ok: #4caf6f; --ok-bg: #1c3327; --bad: #e57373; --bad-bg: #3a2222;
+    --neutral: #9aa1ab; --neutral-bg: #26292c; --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1e2023; --ink-soft: #6b6f66;
+    --border: #dfdcd3; --border-strong: #c8c4b6; --accent: #a8790a; --accent-soft: #f3e6c8; --accent-ink: #5c4306;
+    --row-alt: #f0eee7; --ok: #2e7d4f; --ok-bg: #e2f0e6; --bad: #b3261e; --bad-bg: #f7e2e0;
+    --neutral: #6b7280; --neutral-bg: #eaeaea; --shadow: 0 1px 3px rgba(30, 32, 35, 0.08);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    font-size: 14.5px;
+    line-height: 1.5;
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 1.6rem 1.4rem 4rem; }
+
+  header.top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.9rem;
+    margin-bottom: 1.4rem;
+  }
+  header.top h1 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin: 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .search-form {
+    display: flex;
+    gap: 0.5rem;
+    flex: 1 1 380px;
+  }
+  .search-form input {
+    flex: 1;
+    padding: 0.55rem 0.8rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 0.92rem;
+    font-family: var(--font-data);
+  }
+  .search-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn {
+    padding: 0.55rem 1.1rem;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    font-size: 0.88rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn:disabled { opacity: 0.55; cursor: default; }
+  .btn.secondary {
+    background: transparent;
+    color: var(--ink-soft);
+    border-color: var(--border-strong);
+  }
+
+  .status-line {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    min-height: 1.3em;
+    margin-bottom: 1rem;
+  }
+  .status-line.err { color: var(--bad); }
+  .spinner {
+    display: inline-block;
+    width: 0.85em; height: 0.85em;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -0.15em;
+    margin-right: 0.4em;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.7rem;
+    margin-bottom: 1.4rem;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    box-shadow: var(--shadow);
+  }
+  .card .label {
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 0.3rem;
+  }
+  .card .value {
+    font-family: var(--font-data);
+    font-size: 1.25rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .card.accent .value { color: var(--accent); }
+
+  .batches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 1.2rem;
+  }
+  .batch-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    font-family: var(--font-data);
+    font-size: 0.78rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 5px;
+  }
+  .batch-tag button {
+    background: none; border: none; cursor: pointer;
+    color: var(--accent-ink); font-size: 0.9em; padding: 0; opacity: 0.7;
+  }
+  .batch-tag button:hover { opacity: 1; }
+
+  .table-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .table-scroll { overflow-x: auto; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--row-alt);
+    text-align: left;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--border-strong);
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+  }
+  thead th:hover { color: var(--ink); }
+  thead th .arrow { opacity: 0.5; margin-left: 0.25em; }
+  tbody td {
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    white-space: nowrap;
+  }
+  tbody tr:nth-child(even) { background: var(--row-alt); }
+  tbody tr.row-alerta { background: var(--bad-bg); }
+  tbody tr.row-alerta:hover { filter: brightness(0.97); }
+  td.num, th.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; text-align: right; }
+  td.mono { font-family: var(--font-data); font-size: 0.82rem; }
+  td.wrap-title { white-space: normal; max-width: 260px; }
+
+  .pill {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.15em 0.55em;
+    border-radius: 4px;
+  }
+  .pill.ok { color: var(--ok); background: var(--ok-bg); }
+  .pill.bad { color: var(--bad); background: var(--bad-bg); }
+  .pill.neutral { color: var(--neutral); background: var(--neutral-bg); }
+
+  .empty-state {
+    padding: 3rem 1.5rem;
+    text-align: center;
+    color: var(--ink-soft);
+  }
+  .empty-state .big { font-size: 2rem; margin-bottom: 0.4rem; }
+
+  footer.hint {
+    margin-top: 1rem;
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+  }
+  code.k { font-family: var(--font-data); background: var(--row-alt); padding: 0.05em 0.35em; border-radius: 3px; }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: -0.4rem 0 1.1rem;
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+  }
+  .filter-row select, .filter-row input[type="month"] {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 0.85rem;
+    font-family: var(--font-ui);
+  }
+  .filter-row select:focus, .filter-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .table-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>📊 Vendas por Produto</h1>
+    <form class="search-form" id="form-busca">
+      <input type="text" id="input-produto" placeholder="MLB ID (ex: MLB4551359415) ou Family ID (ex: 5135813632757073)" autocomplete="off">
+      <button class="btn" id="btn-buscar" type="submit">Adicionar à lista</button>
+      <button class="btn secondary" id="btn-limpar" type="button">Limpar tudo</button>
+    </form>
+  </header>
+
+  <div class="filter-row">
+    <label for="select-filtro">Período da busca:</label>
+    <select id="select-filtro">
+      <option value="todos">Todos (histórico completo)</option>
+      <option value="dia">Hoje</option>
+      <option value="semana">Últimos 7 dias</option>
+      <option value="mes">Este mês</option>
+      <option value="especifico">Mês específico…</option>
+    </select>
+    <input type="month" id="input-mes" style="display:none;">
+  </div>
+
+  <div class="status-line" id="status-line"></div>
+
+  <div class="summary" id="summary" style="display:none;">
+    <div class="card"><p class="label">Pedidos na lista</p><p class="value" id="s-pedidos">0</p></div>
+    <div class="card accent"><p class="label">Receita bruta</p><p class="value" id="s-receita">R$ 0,00</p></div>
+    <div class="card"><p class="label">Taxa ML total</p><p class="value" id="s-taxa">R$ 0,00</p></div>
+    <div class="card"><p class="label">Frete total (por sua conta)</p><p class="value" id="s-frete">R$ 0,00</p></div>
+    <div class="card accent"><p class="label">Receita líquida (após taxa+frete)</p><p class="value" id="s-liquido">R$ 0,00</p></div>
+    <div class="card"><p class="label">Ticket médio</p><p class="value" id="s-ticket">R$ 0,00</p></div>
+    <div class="card"><p class="label">Unidades vendidas</p><p class="value" id="s-unidades">0</p></div>
+  </div>
+
+  <div class="batches" id="batches"></div>
+
+  <div class="table-panel">
+    <div id="empty-state" class="empty-state">
+      <div class="big">🔎</div>
+      Cole um MLB ID ou Family ID acima e clique em <strong>"Adicionar à lista"</strong>.<br>
+      Cada busca soma à lista — dá pra combinar vários produtos pra análise junto.
+    </div>
+    <div class="table-toolbar" id="table-toolbar" style="display:none;">
+      <button class="btn secondary" id="btn-exportar" type="button">⬇ Baixar Excel</button>
+    </div>
+    <div class="table-scroll" id="table-scroll" style="display:none;">
+      <table>
+        <thead>
+          <tr>
+            <th data-key="data">Data <span class="arrow"></span></th>
+            <th data-key="order_id">Pedido</th>
+            <th data-key="pack_id">Pacote</th>
+            <th data-key="produto_buscado">Busca de origem</th>
+            <th data-key="mlb_id">MLB</th>
+            <th data-key="sku">SKU</th>
+            <th data-key="variacao">Variação</th>
+            <th data-key="titulo">Título</th>
+            <th class="num" data-key="quantidade">Qtd</th>
+            <th class="num" data-key="venda_total">Venda Total</th>
+            <th class="num" data-key="taxa_total">Taxa ML</th>
+            <th class="num" data-key="tarifa_envio">Frete</th>
+            <th data-key="listing_type_id">Tipo Anúncio</th>
+            <th data-key="status">Status</th>
+            <th data-key="fulfilled">Full</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="hint">
+    Cada linha é 1 item vendido dentro de 1 pedido. Um Family ID busca vendas de <em>todas</em>
+    as variações, somando também anúncios fechados/migrados de cada uma (o histórico às vezes
+    fica lá, não no anúncio ativo). Sem cruzamento de custo de produto — só dados brutos de
+    venda e taxas do ML. Quando um comprador leva produtos diferentes no mesmo carrinho, o ML
+    cria <strong>pedidos separados</strong> (1 por produto) compartilhando o mesmo <strong>Pacote</strong>
+    e o mesmo envio — o selo 📦 na coluna Pacote mostra quando isso acontece. O "Frete" de cada
+    linha mostra o valor cheio do envio (não dividido), mas o resumo já soma esse frete só uma
+    vez por pacote, sem contar 2x.
+  </footer>
+
+</div>
+
+<script>
+  let vendas = [];
+  let buscas = [];
+  let sortState = { key: 'data', dir: 'desc' };
+
+  const $ = (id) => document.getElementById(id);
+  const fmtBRL = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const fmtNum = (v) => Number(v || 0).toLocaleString('pt-BR');
+  const fmtData = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso).slice(0, 10);
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  function setStatus(msg, isErr) {
+    const el = $('status-line');
+    el.innerHTML = msg;
+    el.className = 'status-line' + (isErr ? ' err' : '');
+  }
+
+  function _yyyymm(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+
+  function initFiltroMes() {
+    const hoje = new Date();
+    const limite = new Date(hoje.getFullYear(), hoje.getMonth() - 2, 1); // últimos 3 meses (atual + 2 anteriores)
+    const input = $('input-mes');
+    input.max = _yyyymm(hoje);
+    input.min = _yyyymm(limite);
+    input.value = _yyyymm(hoje);
+  }
+
+  $('select-filtro').addEventListener('change', () => {
+    $('input-mes').style.display = $('select-filtro').value === 'especifico' ? 'inline-block' : 'none';
+  });
+
+  async function buscar(produto) {
+    const filtro = $('select-filtro').value;
+    const mes = filtro === 'especifico' ? $('input-mes').value : '';
+    if (filtro === 'especifico' && !mes) {
+      setStatus('❌ Escolha o mês específico.', true);
+      return;
+    }
+
+    $('btn-buscar').disabled = true;
+    const rotuloFiltro = {
+      todos: 'todo o histórico', dia: 'hoje', semana: 'últimos 7 dias',
+      mes: 'este mês', especifico: `mês ${mes}`,
+    }[filtro] || filtro;
+    setStatus(`<span class="spinner"></span> Buscando vendas de "${produto}" (${rotuloFiltro})... pode levar um tempo se for uma família grande.`);
+
+    try {
+      const params = new URLSearchParams({ produto, filtro });
+      if (mes) params.set('mes', mes);
+      const resp = await fetch('/api/vendas?' + params.toString());
+      const data = await resp.json();
+      if (!data.ok) {
+        setStatus('❌ ' + (data.erro || 'Erro desconhecido.'), true);
+        return;
+      }
+      vendas = vendas.concat(data.vendas);
+      buscas.push({ termo: data.produto_buscado, tipo: data.tipo, n: data.vendas.length, itens: data.itens_consultados.length });
+      setStatus(`✅ "${produto}" (${data.tipo === 'familia' ? 'família, ' + data.itens_consultados.length + ' item(ns)' : 'item individual'}, ${rotuloFiltro}): ${data.vendas.length} venda(s) adicionada(s).`);
+      $('input-produto').value = '';
+      render();
+    } catch (e) {
+      setStatus('❌ Erro de conexão: ' + e.message, true);
+    } finally {
+      $('btn-buscar').disabled = false;
+    }
+  }
+
+  async function exportarExcel() {
+    if (!vendas.length) return;
+    $('btn-exportar').disabled = true;
+    $('btn-exportar').textContent = '⬇ Gerando...';
+    try {
+      const resp = await fetch('/api/exportar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vendas),
+      });
+      if (!resp.ok) {
+        const erro = await resp.json().catch(() => ({}));
+        setStatus('❌ ' + (erro.erro || 'Erro ao gerar Excel.'), true);
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'vendas_bouwobra.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setStatus('❌ Erro ao exportar: ' + e.message, true);
+    } finally {
+      $('btn-exportar').disabled = false;
+      $('btn-exportar').textContent = '⬇ Baixar Excel';
+    }
+  }
+
+  function limparTudo() {
+    vendas = [];
+    buscas = [];
+    setStatus('Lista limpa.');
+    render();
+  }
+
+  function renderBatches() {
+    const el = $('batches');
+    if (!buscas.length) { el.innerHTML = ''; return; }
+    el.innerHTML = buscas.map((b, i) => `
+      <span class="batch-tag">
+        ${b.termo} · ${b.n} venda(s)
+        <button data-idx="${i}" title="Remover essa busca da lista">✕</button>
+      </span>
+    `).join('');
+    el.querySelectorAll('button[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.idx);
+        const removido = buscas[idx];
+        vendas = vendas.filter(v => v.produto_buscado !== removido.termo);
+        buscas.splice(idx, 1);
+        render();
+      });
+    });
+  }
+
+  function renderSummary() {
+    if (!vendas.length) { $('summary').style.display = 'none'; return; }
+    $('summary').style.display = 'grid';
+    // venda_total/taxa_total já vêm multiplicados pela quantidade (do servidor).
+    const receita = vendas.reduce((s, v) => s + (v.venda_total || 0), 0);
+    const taxa = vendas.reduce((s, v) => s + (v.taxa_total || 0), 0);
+    // Frete é por ENVIO, não por linha -- 2 pedidos diferentes podem
+    // compartilhar 1 envio só (pacote com vários produtos), cada um
+    // aparecendo como uma linha com o MESMO tarifa_envio. Dedup por
+    // shipping_id antes de somar, senão conta o mesmo frete 2x.
+    const freteVistos = new Set();
+    const frete = vendas.reduce((s, v) => {
+      if (v.shipping_id) {
+        if (freteVistos.has(v.shipping_id)) return s;
+        freteVistos.add(v.shipping_id);
+      }
+      return s + (v.tarifa_envio || 0);
+    }, 0);
+    const unidades = vendas.reduce((s, v) => s + (v.quantidade || 0), 0);
+    $('s-pedidos').textContent = fmtNum(vendas.length);
+    $('s-receita').textContent = fmtBRL(receita);
+    $('s-taxa').textContent = fmtBRL(taxa);
+    $('s-frete').textContent = fmtBRL(frete);
+    $('s-liquido').textContent = fmtBRL(receita - taxa - frete);
+    $('s-ticket').textContent = fmtBRL(vendas.length ? receita / vendas.length : 0);
+    $('s-unidades').textContent = fmtNum(unidades);
+  }
+
+  function statusPill(status) {
+    const s = String(status || '').toLowerCase();
+    if (s === 'paid') return `<span class="pill ok">paid</span>`;
+    if (s === 'cancelled' || s === 'invalid') return `<span class="pill bad">${s}</span>`;
+    return `<span class="pill neutral">${s || '—'}</span>`;
+  }
+
+  function renderTable() {
+    const rows = [...vendas].sort((a, b) => {
+      let av = a[sortState.key], bv = b[sortState.key];
+      if (typeof av === 'string') av = av.toLowerCase();
+      if (typeof bv === 'string') bv = bv.toLowerCase();
+      if (av < bv) return sortState.dir === 'asc' ? -1 : 1;
+      if (av > bv) return sortState.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    $('empty-state').style.display = rows.length ? 'none' : 'block';
+    $('table-scroll').style.display = rows.length ? 'block' : 'none';
+    $('table-toolbar').style.display = rows.length ? 'flex' : 'none';
+
+    const contagemPacote = {};
+    vendas.forEach(v => {
+      if (v.pack_id) contagemPacote[v.pack_id] = (contagemPacote[v.pack_id] || 0) + 1;
+    });
+
+    $('tbody').innerHTML = rows.map(v => {
+      const pacoteCompartilhado = v.pack_id && contagemPacote[v.pack_id] > 1;
+      return `
+      <tr class="${v.frete_alto ? 'row-alerta' : ''}" ${v.frete_alto ? 'title="Frete provavelmente acima do normal pra essa venda"' : ''}>
+        <td class="mono">${fmtData(v.data)}</td>
+        <td class="mono">${v.order_id ?? ''}</td>
+        <td class="mono">${v.pack_id ?? '—'}${pacoteCompartilhado ? ` <span class="pill neutral" title="Esse pacote tem ${contagemPacote[v.pack_id]} pedidos separados compartilhando 1 envio só — o frete abaixo é o mesmo valor em cada linha, não some direto sem deduplicar">📦 ${contagemPacote[v.pack_id]}</span>` : ''}</td>
+        <td class="mono">${v.produto_buscado ?? ''}</td>
+        <td class="mono">${v.mlb_id ?? ''}</td>
+        <td class="mono">${v.sku || '—'}</td>
+        <td>${v.variacao || '—'}</td>
+        <td class="wrap-title">${v.titulo || ''}</td>
+        <td class="num">${fmtNum(v.quantidade)}</td>
+        <td class="num">${fmtBRL(v.venda_total)}</td>
+        <td class="num">${fmtBRL(v.taxa_total)}</td>
+        <td class="num">${fmtBRL(v.tarifa_envio)}${v.frete_alto ? ' ⚠️' : ''}</td>
+        <td class="mono">${v.listing_type_id || ''}</td>
+        <td>${statusPill(v.status)}</td>
+        <td>${v.fulfilled ? '✓' : ''}</td>
+      </tr>
+    `;
+    }).join('');
+
+    document.querySelectorAll('thead th[data-key]').forEach(th => {
+      const arrow = th.querySelector('.arrow');
+      if (!arrow) return;
+      arrow.textContent = th.dataset.key === sortState.key ? (sortState.dir === 'asc' ? '▲' : '▼') : '';
+    });
+  }
+
+  function render() {
+    renderBatches();
+    renderSummary();
+    renderTable();
+  }
+
+  document.querySelectorAll('thead th[data-key]').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.key;
+      if (sortState.key === key) {
+        sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortState.key = key;
+        sortState.dir = 'desc';
+      }
+      renderTable();
+    });
+  });
+
+  $('form-busca').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const valor = $('input-produto').value.trim();
+    if (!valor) return;
+    buscar(valor);
+  });
+  $('btn-limpar').addEventListener('click', limparTudo);
+  $('btn-exportar').addEventListener('click', exportarExcel);
+
+  initFiltroMes();
+  render();
+</script>
+</body>
+</html>

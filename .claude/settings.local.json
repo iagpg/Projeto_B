@@ -17,7 +17,17 @@
       "PowerShell(clasp --version 2>$null)",
       "PowerShell(npm install -g @google/clasp)",
       "Bash(git add *)",
-      "Bash(git commit --amend -m ' *)"
+      "Bash(git commit --amend -m ' *)",
+      "Bash(python *)",
+      "Bash(git commit *)",
+      "Bash(git check-ignore *)",
+      "WebSearch",
+      "WebFetch(domain:developers.mercadolivre.com.br)",
+      "WebFetch(domain:developers.mercadolibre.com.ar)",
+      "Bash(clasp run *)",
+      "Bash(git fetch *)",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('D:/backend/cache/nf_custo.json', encoding='utf-8'\\)\\); print\\(type\\(d\\)\\); print\\(list\\(d.items\\(\\)\\)[:2] if isinstance\\(d, dict\\) else d[:2]\\)\")",
+      "Bash(python3 -c ' *)"
     ],
     "additionalDirectories": [
       "d:\\backend"

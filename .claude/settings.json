@@ -4,7 +4,11 @@
       "Bash(git rm *)",
       "Bash(git commit --amend -m ' *)",
       "WebFetch(domain:erp.tiny.com.br)",
-      "WebFetch(domain:api-docs.erp.olist.com)"
+      "WebFetch(domain:api-docs.erp.olist.com)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(clasp push *)"
     ]
   }
 }

@@ -450,6 +450,12 @@ API de novo). Hoje nunca é lido do cache (sempre busca ao vivo); dias
 passados ficam cacheados pra sempre. Repetir a mesma busca reaproveita tudo
 que já foi buscado antes, mesmo em período diferente que se sobreponha.
 
+**Cache de SKU/título e tarifa de envio** (`cache/skus.json`,
+`cache/fretes.json` — chaveados por `item_id`/`shipping_id`, sem expiração,
+já que são fatos historicamente estáveis): busca de família de 64 itens caiu
+de ~40s pra ~10s na repetição com os 3 caches (pedidos + SKU + frete) já
+quentes.
+
 ```bash
 python dashboard_vendas/server.py
 # abre http://localhost:8765 automaticamente

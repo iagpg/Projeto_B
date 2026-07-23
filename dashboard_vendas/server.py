@@ -25,6 +25,11 @@ modos de busca (MLB, Family, campo vazio), já que /orders/search sem item= já
 devolve todos os pedidos do dia; pra MLB/Family, filtra localmente em memória
 em vez de chamar a API de novo com item=. Hoje nunca é lido do cache (sempre
 busca ao vivo); dias passados ficam cacheados pra sempre. Ver _obter_pedidos_por_intervalo.
+
+SKU/título por item (cache/skus.json) e tarifa de envio por shipping_id
+(cache/fretes.json) também ficam em cache sem expiração -- são fatos
+historicamente estáveis (ver _resolver_skus/_resolver_fretes), diferente dos
+pedidos de "hoje" que ainda podem mudar.
 """
 
 import io
@@ -54,6 +59,25 @@ _MAX_WORKERS = 8   # concorrência das chamadas ao ML -- uma busca de família (
                     # (146s medido pra 64 itens) pro navegador aguentar sem cair a conexão
 _MESES_MAX = 3      # limite de meses pra trás permitido no filtro "mês específico"
 _CACHE_DIR = Path(__file__).parent / "cache"  # mesmo padrão de services/custo_service.py
+_CACHE_SKUS_PATH = _CACHE_DIR / "skus.json"      # {item_id: {"sku":..., "titulo":...}}
+_CACHE_FRETES_PATH = _CACHE_DIR / "fretes.json"   # {shipping_id (str): custo}
+
+
+def _ler_cache_json(caminho: Path) -> dict:
+    if not caminho.exists():
+        return {}
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+        return dados if isinstance(dados, dict) else {}
+    except Exception:
+        return {}
+
+
+def _gravar_cache_json(caminho: Path, dados: dict) -> None:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = caminho.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(caminho)  # escrita atômica, mesmo padrão do cache por dia
 
 
 # ── Filtro de período ──────────────────────────────────────────────────────────
@@ -333,6 +357,51 @@ def _buscar_custo_envio(shipping_id) -> float:
         return 0.0
 
 
+# Custo de um envio já criado é fato histórico fixo (não muda depois) -- cache
+# em disco sem expiração, chaveado por shipping_id. Só busca na API os que
+# ainda não apareceram em nenhuma busca anterior.
+def _resolver_fretes(shipping_ids) -> dict:
+    shipping_ids = [sid for sid in shipping_ids if sid]
+    if not shipping_ids:
+        return {}
+
+    cache = _ler_cache_json(_CACHE_FRETES_PATH)
+    faltantes = [sid for sid in shipping_ids if str(sid) not in cache]
+
+    if faltantes:
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+            futuros = {pool.submit(_buscar_custo_envio, sid): sid for sid in faltantes}
+            for futuro in as_completed(futuros):
+                sid = futuros[futuro]
+                cache[str(sid)] = futuro.result()
+        _gravar_cache_json(_CACHE_FRETES_PATH, cache)
+
+    return {sid: cache.get(str(sid), 0.0) for sid in shipping_ids}
+
+
+# SKU/título de um anúncio quase nunca mudam -- mesma lógica de cache sem
+# expiração, chaveado por item_id (MLB).
+def _resolver_skus(item_ids) -> dict:
+    item_ids = [iid for iid in item_ids if iid]
+    if not item_ids:
+        return {}
+
+    cache = _ler_cache_json(_CACHE_SKUS_PATH)
+    faltantes = [iid for iid in item_ids if iid not in cache]
+
+    if faltantes:
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+            futuros = {pool.submit(get_item, iid): iid for iid in faltantes}
+            for futuro in as_completed(futuros):
+                iid = futuros[futuro]
+                item = futuro.result() or {}
+                cache[iid] = {"sku": extract_seller_sku(item), "titulo": item.get("title", "")}
+        _gravar_cache_json(_CACHE_SKUS_PATH, cache)
+
+    vazio = {"sku": "", "titulo": ""}
+    return {iid: cache.get(iid, vazio) for iid in item_ids}
+
+
 # "venda total" abaixo desse valor + frete acima desse outro valor = frete
 # desproporcional ao tamanho da venda (indício de frete acima do normal pra
 # esse produto). Confirmado com um caso real: 3 un. x R$78,99 = R$236,97 de
@@ -414,23 +483,14 @@ def buscar_vendas_todos_produtos(filtro: str = "todos", mes: str = "") -> dict:
     shipping_ids = {
         (p.get("shipping") or {}).get("id") for p in pedidos if (p.get("shipping") or {}).get("id")
     }
-    custo_envio_por_shipping = {}
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futuros = {pool.submit(_buscar_custo_envio, sid): sid for sid in shipping_ids}
-        for futuro in as_completed(futuros):
-            custo_envio_por_shipping[futuros[futuro]] = futuro.result()
+    custo_envio_por_shipping = _resolver_fretes(shipping_ids)
 
     item_ids = {
         (oi.get("item") or {}).get("id")
         for p in pedidos for oi in (p.get("order_items") or [])
         if (oi.get("item") or {}).get("id")
     }
-    sku_por_item = {}
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futuros = {pool.submit(get_item, iid): iid for iid in item_ids}
-        for futuro in as_completed(futuros):
-            item = futuro.result() or {}
-            sku_por_item[futuros[futuro]] = extract_seller_sku(item)
+    sku_por_item = _resolver_skus(item_ids)
 
     vendas = []
     for pedido in pedidos:
@@ -438,7 +498,7 @@ def buscar_vendas_todos_produtos(filtro: str = "todos", mes: str = "") -> dict:
         tarifa_envio = custo_envio_por_shipping.get(shipping_id, 0.0) if shipping_id else 0.0
         for oi in pedido.get("order_items", []) or []:
             linha = _linha_de_item(oi, pedido, tarifa_envio)
-            linha["sku"] = sku_por_item.get(linha["mlb_id"], "")
+            linha["sku"] = sku_por_item.get(linha["mlb_id"], {}).get("sku", "")
             linha["produto_buscado"] = "(todos os produtos)"
             vendas.append(linha)
 
@@ -468,15 +528,7 @@ def buscar_vendas_produto(produto_bruto: str, filtro: str = "todos", mes: str = 
 
     item_ids = [i["item_id"] for i in itens_info]
 
-    sku_por_item = {}
-    titulo_por_item = {}
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futuros = {pool.submit(get_item, item_id): item_id for item_id in item_ids}
-        for futuro in as_completed(futuros):
-            item_id = futuros[futuro]
-            item = futuro.result() or {}
-            sku_por_item[item_id] = extract_seller_sku(item)
-            titulo_por_item[item_id] = item.get("title", "")
+    info_por_item = _resolver_skus(item_ids)
 
     # Com período delimitado, busca os pedidos UMA VEZ só (compartilhado, via
     # cache por dia) e filtra localmente por item -- antes, cada item_id da
@@ -500,28 +552,23 @@ def buscar_vendas_produto(produto_bruto: str, filtro: str = "todos", mes: str = 
                 item_id = futuros[futuro]
                 pedidos_por_item[item_id] = futuro.result()
 
-    # Tarifa de envio ("por sua conta") -- 1 chamada por pedido (via shipping.id),
-    # deduplicada por shipping_id e paralelizada (senão vira o novo gargalo).
+    # Tarifa de envio ("por sua conta") -- cacheada por shipping_id (fato
+    # histórico fixo, ver _resolver_fretes), só busca na API o que faltar.
     shipping_ids = {
         (pedido.get("shipping") or {}).get("id")
         for pedidos in pedidos_por_item.values()
         for pedido in pedidos
         if (pedido.get("shipping") or {}).get("id")
     }
-    custo_envio_por_shipping = {}
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futuros = {pool.submit(_buscar_custo_envio, sid): sid for sid in shipping_ids}
-        for futuro in as_completed(futuros):
-            sid = futuros[futuro]
-            custo_envio_por_shipping[sid] = futuro.result()
+    custo_envio_por_shipping = _resolver_fretes(shipping_ids)
 
     vendas = []
     for item_id in item_ids:
         for pedido in pedidos_por_item.get(item_id, []):
             for linha in _linhas_de_pedido(pedido, item_id, custo_envio_por_shipping):
-                linha["sku"] = sku_por_item.get(item_id, "")
+                linha["sku"] = info_por_item.get(item_id, {}).get("sku", "")
                 if not linha["titulo"]:
-                    linha["titulo"] = titulo_por_item.get(item_id, "")
+                    linha["titulo"] = info_por_item.get(item_id, {}).get("titulo", "")
                 linha["produto_buscado"] = produto_bruto
                 vendas.append(linha)
 

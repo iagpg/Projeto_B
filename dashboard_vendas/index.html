@@ -236,6 +236,13 @@
 
   tbody tr.row-pack-filho { background: var(--row-alt); font-size: 0.82rem; color: var(--ink-soft); }
   tbody tr.row-pack-filho td { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+
+  /* Venda avulsa que faz parte de um pacote, mas cujo(s) pedido(s) irmão(s)
+     não estão na lista atual pra formar o agrupamento pai/filho -- mesmo
+     tom do row-pack-pai, só sem negrito/cursor (não é clicável/expansível). */
+  tbody tr.row-pacote-solo { background: var(--accent-soft); }
+  tbody tr.row-pacote-solo:hover { filter: brightness(0.97); }
+  tbody tr.row-pacote-solo.row-alerta { background: var(--bad-bg); }
   td.num, th.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; text-align: right; }
   td.mono { font-family: var(--font-data); font-size: 0.82rem; }
   td.wrap-title { white-space: normal; max-width: 260px; }
@@ -607,12 +614,22 @@
   }
 
   function linhaHtml(v, indentado) {
-    const classe = [v.frete_alto ? 'row-alerta' : '', indentado ? 'row-pack-filho' : ''].filter(Boolean).join(' ');
+    const pacoteSolo = !indentado && !!v.pack_id; // pacote sem o(s) irmão(s) na lista atual pra agrupar
+    const classe = [
+      v.frete_alto ? 'row-alerta' : '',
+      indentado ? 'row-pack-filho' : '',
+      pacoteSolo ? 'row-pacote-solo' : '',
+    ].filter(Boolean).join(' ');
+
+    const titulos = [];
+    if (v.frete_alto) titulos.push('Frete provavelmente acima do normal pra essa venda');
+    if (pacoteSolo) titulos.push(`Faz parte do pacote ${v.pack_id} — outro produto desse pacote não está nessa lista agora`);
+
     return `
-      <tr class="${classe}" ${v.frete_alto ? 'title="Frete provavelmente acima do normal pra essa venda"' : ''}>
+      <tr class="${classe}" ${titulos.length ? `title="${titulos.join(' — ')}"` : ''}>
         <td class="mono">${fmtData(v.data)}</td>
         <td class="mono">${v.order_id ?? ''}</td>
-        <td class="mono">${indentado ? '↳ ' : ''}${v.pack_id ?? '—'}</td>
+        <td class="mono">${indentado ? '↳ ' : ''}${pacoteSolo ? '📦 ' : ''}${v.pack_id ?? '—'}</td>
         <td class="mono">${v.produto_buscado ?? ''}</td>
         <td class="mono">${v.mlb_id ?? ''}</td>
         <td class="mono">${v.sku || '—'}</td>

@@ -442,6 +442,14 @@ combinar vários produtos diferentes numa mesma análise. Não cruza com custo
 por pedido. Chamadas ao ML paralelizadas (`_MAX_WORKERS=8`) — família de 64
 itens caiu de 146s pra ~33s.
 
+**Cache de pedidos por dia** (`dashboard_vendas/cache/AAAA-MM-DD.json`, já no
+`.gitignore` genérico `cache/`): os pedidos ficam cacheados por dia civil,
+sem filtro de item — um único cache serve busca por MLB, Family e "todos os
+produtos" (pra MLB/Family, filtra localmente em memória em vez de chamar a
+API de novo). Hoje nunca é lido do cache (sempre busca ao vivo); dias
+passados ficam cacheados pra sempre. Repetir a mesma busca reaproveita tudo
+que já foi buscado antes, mesmo em período diferente que se sobreponha.
+
 ```bash
 python dashboard_vendas/server.py
 # abre http://localhost:8765 automaticamente

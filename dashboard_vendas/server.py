@@ -18,6 +18,13 @@ Aceita, na busca:
   - campo vazio -> busca TODOS os produtos vendidos no período selecionado
     (exige um filtro de data específico, não pode ser "Todos" -- o histórico
     completo do vendedor é grande demais pra isso).
+
+Cache: os pedidos são cacheados em disco por dia civil (dashboard_vendas/cache/
+AAAA-MM-DD.json), sem filtro de item -- um único cache por dia serve os três
+modos de busca (MLB, Family, campo vazio), já que /orders/search sem item= já
+devolve todos os pedidos do dia; pra MLB/Family, filtra localmente em memória
+em vez de chamar a API de novo com item=. Hoje nunca é lido do cache (sempre
+busca ao vivo); dias passados ficam cacheados pra sempre. Ver _obter_pedidos_por_intervalo.
 """
 
 import io
@@ -27,7 +34,7 @@ import sys
 import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -46,6 +53,7 @@ _MAX_WORKERS = 8   # concorrência das chamadas ao ML -- uma busca de família (
                     # de variações x múltiplos item_ids cada) é lenta demais em série
                     # (146s medido pra 64 itens) pro navegador aguentar sem cair a conexão
 _MESES_MAX = 3      # limite de meses pra trás permitido no filtro "mês específico"
+_CACHE_DIR = Path(__file__).parent / "cache"  # mesmo padrão de services/custo_service.py
 
 
 # ── Filtro de período ──────────────────────────────────────────────────────────
@@ -101,6 +109,146 @@ def _calcular_intervalo(filtro: str, mes: str = ""):
         return _iso_ml(inicio), _iso_ml(min(fim, agora))
 
     return None, None  # "todos" (ou valor desconhecido -- sem filtro)
+
+
+# ── Cache de pedidos por dia civil ──────────────────────────────────────────────
+#
+# GET /orders/search?seller=X&order.date_created.from=A&to=B (sem item=) já
+# devolve TODOS os pedidos do vendedor nessa janela -- um superconjunto que
+# contém qualquer pedido que bateria com item=X pra essa mesma janela (o
+# filtro item= só restringe se aquele item aparece em order_items[], não muda
+# o universo de pedidos -- confirmado testando ao vivo). Por isso cacheamos os
+# pedidos BRUTOS por dia civil, sem filtro de item: o mesmo cache serve busca
+# por MLB, por Family (várias variações) e por período inteiro (campo vazio)
+# -- pra MLB/Family, filtra localmente em memória (_filtra_pedidos_por_item)
+# em vez de chamar a API nova de novo com item=.
+#
+# Hoje nunca é lido do cache (pode ainda estar recebendo pedidos novos) --
+# sempre busca ao vivo. Dias passados ficam cacheados pra sempre (imutáveis).
+
+def _dia_str(d: date) -> str:
+    return d.strftime("%Y-%m-%d")
+
+
+def _hoje_str() -> str:
+    return _dia_str(datetime.now().date())
+
+
+def _limites_dia(dia: date) -> tuple:
+    inicio = datetime(dia.year, dia.month, dia.day, 0, 0, 0)
+    fim = datetime(dia.year, dia.month, dia.day, 23, 59, 59)
+    return _iso_ml(inicio), _iso_ml(fim)
+
+
+def _dias_no_intervalo(date_from_iso: str, date_to_iso: str) -> list:
+    # formato fixo de _iso_ml: "AAAA-MM-DDTHH:MM:SS.000-03:00" -- os 10
+    # primeiros caracteres já são a data, sem precisar parsear o resto.
+    inicio = datetime.strptime(date_from_iso[:10], "%Y-%m-%d").date()
+    fim = datetime.strptime(date_to_iso[:10], "%Y-%m-%d").date()
+    dias = []
+    atual = inicio
+    while atual <= fim:
+        dias.append(atual)
+        atual += timedelta(days=1)
+    return dias
+
+
+def _cache_path_dia(dia_str: str) -> Path:
+    return _CACHE_DIR / f"{dia_str}.json"
+
+
+def _ler_cache_dia(dia_str: str):
+    """None = cache miss (arquivo não existe ou está marcado incompleto --
+    ex: sobra de um dia que era 'hoje' quando foi gravado)."""
+    caminho = _cache_path_dia(dia_str)
+    if not caminho.exists():
+        return None
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(dados, dict) or not dados.get("completo"):
+        return None
+    return dados.get("pedidos", [])
+
+
+def _gravar_cache_dia(dia_str: str, pedidos: list, completo: bool) -> None:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    caminho = _cache_path_dia(dia_str)
+    tmp = caminho.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps({"completo": completo, "pedidos": pedidos}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    tmp.replace(caminho)  # escrita atômica -- evita JSON corrompido em corrida entre threads/requisições
+
+
+def _buscar_pedidos_dia_api(dia: date) -> list:
+    date_from, date_to = _limites_dia(dia)
+    pedidos = []
+    offset = 0
+    while True:
+        params = {
+            "seller": ML_USER_ID, "limit": 51, "offset": offset,
+            "order.date_created.from": date_from, "order.date_created.to": date_to,
+        }
+        resp = ml_get(f"{_BASE}/orders/search", params)
+        if not isinstance(resp, dict):
+            break
+        resultados = resp.get("results", [])
+        if not resultados:
+            break
+        pedidos.extend(resultados)
+        total = (resp.get("paging") or {}).get("total", 0)
+        offset += 51
+        if offset >= total or offset >= 5000:
+            break
+        time.sleep(0.05)
+    return pedidos
+
+
+def _obter_pedidos_por_intervalo(date_from_iso: str, date_to_iso: str) -> list:
+    """Orquestrador do cache por dia: descobre os gaps, busca só o que falta
+    (em paralelo) e devolve todos os pedidos do intervalo, em ordem cronológica."""
+    hoje_str = _hoje_str()
+    dias = _dias_no_intervalo(date_from_iso, date_to_iso)
+
+    pedidos_por_dia = {}
+    pendentes = []
+    for dia in dias:
+        dia_str = _dia_str(dia)
+        if dia_str == hoje_str:
+            pendentes.append(dia)
+            continue
+        cache = _ler_cache_dia(dia_str)
+        if cache is not None:
+            pedidos_por_dia[dia_str] = cache
+        else:
+            pendentes.append(dia)
+
+    print(f"[cache] {len(dias) - len(pendentes)}/{len(dias)} dia(s) em cache, buscando {len(pendentes)} na API")
+
+    if pendentes:
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+            futuros = {pool.submit(_buscar_pedidos_dia_api, dia): dia for dia in pendentes}
+            for futuro in as_completed(futuros):
+                dia = futuros[futuro]
+                dia_str = _dia_str(dia)
+                pedidos_dia = futuro.result()
+                pedidos_por_dia[dia_str] = pedidos_dia
+                _gravar_cache_dia(dia_str, pedidos_dia, completo=(dia_str != hoje_str))
+
+    todos = []
+    for dia in dias:
+        todos.extend(pedidos_por_dia.get(_dia_str(dia), []))
+    return todos
+
+
+def _filtra_pedidos_por_item(pedidos: list, item_id: str) -> list:
+    return [
+        p for p in pedidos
+        if any((oi.get("item") or {}).get("id") == item_id for oi in (p.get("order_items") or []))
+    ]
 
 
 # ── Resolução de entrada (MLB individual x Family ID) ──────────────────────────
@@ -242,34 +390,10 @@ def _linhas_de_pedido(pedido: dict, item_id_alvo: str, custo_envio_por_shipping:
 # ── Busca por período, sem produto específico (todos os produtos) ─────────────
 #
 # Sem MLB/Family ID pra resolver primeiro -- busca os PEDIDOS direto por data
-# (order.date_created.from/to, sem filtro de item) e só depois descobre quais
+# (via _obter_pedidos_por_intervalo, cache por dia) e só depois descobre quais
 # produtos apareceram, resolvendo SKU/frete pra cada um. "Todos" fica de fora
 # por segurança: o vendedor já tem 34 mil+ pedidos pagos no total, buscar tudo
 # sem filtro de período travaria a busca.
-
-def _buscar_todos_pedidos_periodo(date_from: str, date_to: str, limite_seguranca: int = 20000) -> list:
-    pedidos = []
-    offset = 0
-    while True:
-        params = {"seller": ML_USER_ID, "limit": 51, "offset": offset}
-        if date_from:
-            params["order.date_created.from"] = date_from
-        if date_to:
-            params["order.date_created.to"] = date_to
-        resp = ml_get(f"{_BASE}/orders/search", params)
-        if not isinstance(resp, dict):
-            break
-        resultados = resp.get("results", [])
-        if not resultados:
-            break
-        pedidos.extend(resultados)
-        total = (resp.get("paging") or {}).get("total", 0)
-        offset += 51
-        if offset >= total or offset >= limite_seguranca:
-            break
-        time.sleep(0.05)
-    return pedidos
-
 
 def buscar_vendas_todos_produtos(filtro: str = "todos", mes: str = "") -> dict:
     date_from, date_to = _calcular_intervalo(filtro, mes)  # pode levantar ValueError
@@ -279,7 +403,7 @@ def buscar_vendas_todos_produtos(filtro: str = "todos", mes: str = "") -> dict:
             "o histórico completo do vendedor é grande demais pra isso."
         )
 
-    pedidos = _buscar_todos_pedidos_periodo(date_from, date_to)
+    pedidos = _obter_pedidos_por_intervalo(date_from, date_to)
     if not pedidos:
         return {
             "ok": True, "produto_buscado": "(todos os produtos)", "tipo": "todos",
@@ -354,15 +478,27 @@ def buscar_vendas_produto(produto_bruto: str, filtro: str = "todos", mes: str = 
             sku_por_item[item_id] = extract_seller_sku(item)
             titulo_por_item[item_id] = item.get("title", "")
 
-    pedidos_por_item = {}
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futuros = {
-            pool.submit(_buscar_pedidos_item, item_id, date_from, date_to): item_id
+    # Com período delimitado, busca os pedidos UMA VEZ só (compartilhado, via
+    # cache por dia) e filtra localmente por item -- antes, cada item_id da
+    # família disparava sua própria busca na API; agora N variações == 1 busca
+    # de pedidos + N filtros em memória. Sem período ("todos"), sem cache: cai
+    # no caminho antigo, 1 busca por item direto na API (mesmo de sempre).
+    if date_from and date_to:
+        pedidos_compartilhados = _obter_pedidos_por_intervalo(date_from, date_to)
+        pedidos_por_item = {
+            item_id: _filtra_pedidos_por_item(pedidos_compartilhados, item_id)
             for item_id in item_ids
         }
-        for futuro in as_completed(futuros):
-            item_id = futuros[futuro]
-            pedidos_por_item[item_id] = futuro.result()
+    else:
+        pedidos_por_item = {}
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+            futuros = {
+                pool.submit(_buscar_pedidos_item, item_id, date_from, date_to): item_id
+                for item_id in item_ids
+            }
+            for futuro in as_completed(futuros):
+                item_id = futuros[futuro]
+                pedidos_por_item[item_id] = futuro.result()
 
     # Tarifa de envio ("por sua conta") -- 1 chamada por pedido (via shipping.id),
     # deduplicada por shipping_id e paralelizada (senão vira o novo gargalo).

@@ -307,6 +307,7 @@
     <form class="search-form" id="form-busca">
       <input type="text" id="input-produto" placeholder="MLB ID, Family ID ou SKU — deixe vazio pra buscar todos os produtos do período" autocomplete="off">
       <button class="btn" id="btn-buscar" type="submit">Adicionar à lista</button>
+      <button class="btn secondary" id="btn-cancelar" type="button" style="display:none;">Cancelar busca</button>
       <button class="btn secondary" id="btn-limpar" type="button">Limpar tudo</button>
     </form>
   </header>
@@ -315,7 +316,7 @@
     <label for="select-filtro">Período da busca:</label>
     <select id="select-filtro">
       <option value="todos">Todos (histórico completo)</option>
-      <option value="dia">Hoje</option>
+      <option value="dia" selected>Hoje</option>
       <option value="semana">Últimos 7 dias</option>
       <option value="mes">Este mês</option>
       <option value="3meses">Últimos 3 meses</option>
@@ -424,6 +425,12 @@
     $('input-mes').style.display = $('select-filtro').value === 'especifico' ? 'inline-block' : 'none';
   });
 
+  let controladorBusca = null; // AbortController da busca em andamento (null = nenhuma)
+
+  function cancelarBusca() {
+    if (controladorBusca) controladorBusca.abort();
+  }
+
   async function buscar(produto) {
     const filtro = $('select-filtro').value;
     const mes = filtro === 'especifico' ? $('input-mes').value : '';
@@ -437,6 +444,8 @@
     }
 
     $('btn-buscar').disabled = true;
+    $('btn-cancelar').style.display = 'inline-block';
+    controladorBusca = new AbortController();
     const rotuloFiltro = {
       todos: 'todo o histórico', dia: 'hoje', semana: 'últimos 7 dias',
       mes: 'este mês', '3meses': 'últimos 3 meses', especifico: `mês ${mes}`,
@@ -447,7 +456,7 @@
     try {
       const params = new URLSearchParams({ produto, filtro });
       if (mes) params.set('mes', mes);
-      const resp = await fetch('/api/vendas?' + params.toString());
+      const resp = await fetch('/api/vendas?' + params.toString(), { signal: controladorBusca.signal });
       const data = await resp.json();
       if (!data.ok) {
         setStatus('❌ ' + (data.erro || 'Erro desconhecido.'), true);
@@ -463,9 +472,15 @@
       $('input-produto').value = '';
       render();
     } catch (e) {
-      setStatus('❌ Erro de conexão: ' + e.message, true);
+      if (e.name === 'AbortError') {
+        setStatus('⏹️ Busca cancelada.');
+      } else {
+        setStatus('❌ Erro de conexão: ' + e.message, true);
+      }
     } finally {
       $('btn-buscar').disabled = false;
+      $('btn-cancelar').style.display = 'none';
+      controladorBusca = null;
     }
   }
 
@@ -734,6 +749,7 @@
   });
   $('btn-limpar').addEventListener('click', limparTudo);
   $('btn-exportar').addEventListener('click', exportarExcel);
+  $('btn-cancelar').addEventListener('click', cancelarBusca);
 
   initFiltroMes();
   render();

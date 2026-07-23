@@ -305,7 +305,7 @@
   <header class="top">
     <h1>📊 Vendas por Produto</h1>
     <form class="search-form" id="form-busca">
-      <input type="text" id="input-produto" placeholder="MLB ID ou Family ID — deixe vazio pra buscar todos os produtos do período" autocomplete="off">
+      <input type="text" id="input-produto" placeholder="MLB ID, Family ID ou SKU — deixe vazio pra buscar todos os produtos do período" autocomplete="off">
       <button class="btn" id="btn-buscar" type="submit">Adicionar à lista</button>
       <button class="btn secondary" id="btn-limpar" type="button">Limpar tudo</button>
     </form>
@@ -457,6 +457,7 @@
       buscas.push({ termo: data.produto_buscado, tipo: data.tipo, n: data.vendas.length, itens: data.itens_consultados.length });
       const rotuloTipo = data.tipo === 'familia' ? `família, ${data.itens_consultados.length} item(ns)`
                        : data.tipo === 'todos' ? `todos os produtos, ${data.itens_consultados.length} item(ns) distintos`
+                       : data.tipo === 'sku' ? `SKU, ${data.itens_consultados.length} anúncio(s)`
                        : 'item individual';
       setStatus(`✅ "${alvo}" (${rotuloTipo}, ${rotuloFiltro}): ${data.vendas.length} venda(s) adicionada(s).`);
       $('input-produto').value = '';

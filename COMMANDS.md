@@ -468,6 +468,12 @@ python dashboard_vendas/server.py
   de cada uma — inclusive anúncios fechados/migrados, onde o histórico de
   venda muitas vezes fica (o anúncio ativo pode mostrar 0 vendas mesmo tendo
   vendido bastante antes de ser migrado).
+- **SKU** (código do vendedor, ex: `10034034166838`) → resolve via
+  `search_by_sku` (já existente em `connectors/mercadolivre/client.py`) pra
+  todos os MLB IDs associados — mesma lógica de não perder anúncio
+  fechado/migrado. Só é tentado se a entrada não bater como MLB nem como
+  Family (SKUs desse projeto costumam ter 14 dígitos, mesmo tamanho de um
+  Family ID, então Family é sempre tentado primeiro).
 - **Campo vazio** → busca todos os produtos vendidos no período escolhido
   (busca os pedidos direto por data, sem resolver item primeiro). Exige um
   filtro específico — não funciona com "Todos", que buscaria o histórico

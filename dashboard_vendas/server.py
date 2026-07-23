@@ -15,6 +15,10 @@ Aceita, na busca:
     associados (o ativo e qualquer fechado/migrado) -- o histórico de venda
     muitas vezes fica no anúncio antigo, não no atual (confirmado: variação
     MLBU3076710630 tinha 0 vendas no item ativo e 113 no fechado).
+  - um SKU (código do vendedor) -> resolve via search_by_sku (já existente
+    em connectors/mercadolivre/client.py) pra todos os MLB IDs associados.
+    Fallback: só é tentado se não bater como MLB nem como Family -- SKUs
+    desse projeto costumam ter 14 dígitos, mesmo tamanho de um Family ID.
   - campo vazio -> busca TODOS os produtos vendidos no período selecionado
     (exige um filtro de data específico, não pode ser "Todos" -- o histórico
     completo do vendedor é grande demais pra isso).
@@ -49,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 
-from connectors.mercadolivre.client import ml_get, get_item, extract_seller_sku, ML_USER_ID
+from connectors.mercadolivre.client import ml_get, get_item, extract_seller_sku, search_by_sku, ML_USER_ID
 
 _BASE = "https://api.mercadolibre.com"
 _PORT = 8765
@@ -275,17 +279,7 @@ def _filtra_pedidos_por_item(pedidos: list, item_id: str) -> list:
     ]
 
 
-# ── Resolução de entrada (MLB individual x Family ID) ──────────────────────────
-
-def _normalizar_entrada(bruto: str):
-    bruto = bruto.strip()
-    digitos = re.sub(r"\D", "", bruto)
-    if bruto.upper().startswith("MLB"):
-        return ("item", bruto.upper())
-    if len(digitos) >= 14:
-        return ("familia", digitos)
-    return ("item", "MLB" + digitos)
-
+# ── Resolução de entrada (MLB individual x Family ID x SKU) ────────────────────
 
 def _buscar_itens_do_up(up: str) -> list:
     resp = ml_get(f"{_BASE}/users/{ML_USER_ID}/items/search", {"user_product_id": up})
@@ -309,6 +303,33 @@ def _coletar_itens_da_familia(family_id: str) -> list:
         for futuro in as_completed(futuros):
             itens.extend(futuro.result())
     return itens
+
+
+def _resolver_tipo_busca(produto_bruto: str):
+    """Decide como resolver a entrada em item_ids reais -- MLB direto, Family
+    ID, ou SKU (fallback, via search_by_sku já existente em
+    connectors/mercadolivre/client.py). Retorna (tipo, itens_info); tipo é
+    None e itens_info [] se nada bateu com nenhuma das três formas.
+
+    SKUs desse projeto costumam ter 14 dígitos (mesmo tamanho de um Family
+    ID) -- por isso Family só é aceito como tipo final se realmente resolver
+    alguma variação; senão, cai pra tentar como SKU mesmo assim."""
+    bruto = produto_bruto.strip()
+
+    if bruto.upper().startswith("MLB"):
+        return "item", [{"item_id": bruto.upper(), "user_product_id": None}]
+
+    digitos = re.sub(r"\D", "", bruto)
+    if len(digitos) >= 14:
+        itens_info = _coletar_itens_da_familia(digitos)
+        if itens_info:
+            return "familia", itens_info
+
+    mlb_ids = search_by_sku(bruto)
+    if mlb_ids:
+        return "sku", [{"item_id": mid, "user_product_id": None} for mid in mlb_ids]
+
+    return None, []
 
 
 # ── Pedidos ────────────────────────────────────────────────────────────────────
@@ -517,14 +538,9 @@ def buscar_vendas_todos_produtos(filtro: str = "todos", mes: str = "") -> dict:
 def buscar_vendas_produto(produto_bruto: str, filtro: str = "todos", mes: str = "") -> dict:
     date_from, date_to = _calcular_intervalo(filtro, mes)  # pode levantar ValueError
 
-    tipo, valor = _normalizar_entrada(produto_bruto)
-
-    if tipo == "familia":
-        itens_info = _coletar_itens_da_familia(valor)
-        if not itens_info:
-            return {"ok": False, "erro": f"Nenhuma variação encontrada para o Family ID {valor}."}
-    else:
-        itens_info = [{"item_id": valor, "user_product_id": None}]
+    tipo, itens_info = _resolver_tipo_busca(produto_bruto)
+    if not itens_info:
+        return {"ok": False, "erro": f'Não encontrei nada pra "{produto_bruto}" (tentei como MLB ID, Family ID e SKU).'}
 
     item_ids = [i["item_id"] for i in itens_info]
 

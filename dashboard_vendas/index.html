@@ -298,7 +298,7 @@
   <header class="top">
     <h1>📊 Vendas por Produto</h1>
     <form class="search-form" id="form-busca">
-      <input type="text" id="input-produto" placeholder="MLB ID (ex: MLB4551359415) ou Family ID (ex: 5135813632757073)" autocomplete="off">
+      <input type="text" id="input-produto" placeholder="MLB ID ou Family ID — deixe vazio pra buscar todos os produtos do período" autocomplete="off">
       <button class="btn" id="btn-buscar" type="submit">Adicionar à lista</button>
       <button class="btn secondary" id="btn-limpar" type="button">Limpar tudo</button>
     </form>
@@ -424,13 +424,18 @@
       setStatus('❌ Escolha o mês específico.', true);
       return;
     }
+    if (!produto && filtro === 'todos') {
+      setStatus('❌ Pra buscar todos os produtos, escolha um período (não pode ser "Todos") — o histórico completo é grande demais.', true);
+      return;
+    }
 
     $('btn-buscar').disabled = true;
     const rotuloFiltro = {
       todos: 'todo o histórico', dia: 'hoje', semana: 'últimos 7 dias',
       mes: 'este mês', '3meses': 'últimos 3 meses', especifico: `mês ${mes}`,
     }[filtro] || filtro;
-    setStatus(`<span class="spinner"></span> Buscando vendas de "${produto}" (${rotuloFiltro})... pode levar um tempo se for uma família grande.`);
+    const alvo = produto || 'todos os produtos';
+    setStatus(`<span class="spinner"></span> Buscando vendas de "${alvo}" (${rotuloFiltro})... pode levar um tempo se for uma busca grande.`);
 
     try {
       const params = new URLSearchParams({ produto, filtro });
@@ -443,7 +448,10 @@
       }
       vendas = vendas.concat(data.vendas);
       buscas.push({ termo: data.produto_buscado, tipo: data.tipo, n: data.vendas.length, itens: data.itens_consultados.length });
-      setStatus(`✅ "${produto}" (${data.tipo === 'familia' ? 'família, ' + data.itens_consultados.length + ' item(ns)' : 'item individual'}, ${rotuloFiltro}): ${data.vendas.length} venda(s) adicionada(s).`);
+      const rotuloTipo = data.tipo === 'familia' ? `família, ${data.itens_consultados.length} item(ns)`
+                       : data.tipo === 'todos' ? `todos os produtos, ${data.itens_consultados.length} item(ns) distintos`
+                       : 'item individual';
+      setStatus(`✅ "${alvo}" (${rotuloTipo}, ${rotuloFiltro}): ${data.vendas.length} venda(s) adicionada(s).`);
       $('input-produto').value = '';
       render();
     } catch (e) {
@@ -696,9 +704,8 @@
 
   $('form-busca').addEventListener('submit', (e) => {
     e.preventDefault();
-    const valor = $('input-produto').value.trim();
-    if (!valor) return;
-    buscar(valor);
+    // Campo vazio é válido -- busca todos os produtos vendidos no período selecionado.
+    buscar($('input-produto').value.trim());
   });
   $('btn-limpar').addEventListener('click', limparTudo);
   $('btn-exportar').addEventListener('click', exportarExcel);

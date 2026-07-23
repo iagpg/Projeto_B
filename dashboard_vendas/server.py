@@ -15,6 +15,9 @@ Aceita, na busca:
     associados (o ativo e qualquer fechado/migrado) -- o histórico de venda
     muitas vezes fica no anúncio antigo, não no atual (confirmado: variação
     MLBU3076710630 tinha 0 vendas no item ativo e 113 no fechado).
+  - campo vazio -> busca TODOS os produtos vendidos no período selecionado
+    (exige um filtro de data específico, não pode ser "Todos" -- o histórico
+    completo do vendedor é grande demais pra isso).
 """
 
 import io
@@ -191,47 +194,138 @@ _LIMITE_VENDA_FRETE_ALTO = 78.99
 _LIMITE_FRETE_ALTO = 9.0
 
 
+def _linha_de_item(oi: dict, pedido: dict, tarifa_envio: float) -> dict:
+    item = oi.get("item", {}) or {}
+    var_attrs = item.get("variation_attributes") or []
+    variacao = ", ".join(f"{a.get('name')}: {a.get('value_name')}" for a in var_attrs)
+
+    # unit_price/sale_fee são POR UNIDADE (confirmado: 3un. x 78,99 =
+    # 236,97 = total_amount do pedido; 9,36 x 3 = 28,08 = tarifa de 12%
+    # mostrada no detalhe do pedido no próprio ML) -- multiplica pela
+    # quantidade pra refletir o valor real movimentado nessa linha.
+    quantidade = oi.get("quantity", 0) or 0
+    venda_total = round((oi.get("unit_price", 0) or 0) * quantidade, 2)
+    taxa_total = round((oi.get("sale_fee", 0) or 0) * quantidade, 2)
+
+    return {
+        "order_id": pedido.get("id"),
+        "pack_id": pedido.get("pack_id"),  # varios pedidos podem compartilhar 1 pacote/envio
+        "shipping_id": (pedido.get("shipping") or {}).get("id"),  # chave real pra deduplicar frete na soma
+        "data": pedido.get("date_created"),
+        "status": pedido.get("status"),
+        "fulfilled": bool(pedido.get("fulfilled")),
+        "mlb_id": item.get("id"),
+        "titulo": item.get("title", ""),
+        "variacao": variacao,
+        "quantidade": quantidade,
+        "preco_unitario": oi.get("unit_price", 0),
+        "taxa_ml": oi.get("sale_fee", 0),
+        "venda_total": venda_total,
+        "taxa_total": taxa_total,
+        "tarifa_envio": tarifa_envio,
+        "frete_alto": venda_total < _LIMITE_VENDA_FRETE_ALTO and tarifa_envio > _LIMITE_FRETE_ALTO,
+        "listing_type_id": oi.get("listing_type_id", ""),
+        "total_pedido": pedido.get("total_amount", 0),
+    }
+
+
 def _linhas_de_pedido(pedido: dict, item_id_alvo: str, custo_envio_por_shipping: dict) -> list:
-    linhas = []
     shipping_id = (pedido.get("shipping") or {}).get("id")
     tarifa_envio = custo_envio_por_shipping.get(shipping_id, 0.0) if shipping_id else 0.0
+    return [
+        _linha_de_item(oi, pedido, tarifa_envio)
+        for oi in (pedido.get("order_items", []) or [])
+        if (oi.get("item") or {}).get("id") == item_id_alvo
+    ]
 
-    for oi in pedido.get("order_items", []) or []:
-        item = oi.get("item", {}) or {}
-        if item.get("id") != item_id_alvo:
-            continue
-        var_attrs = item.get("variation_attributes") or []
-        variacao = ", ".join(f"{a.get('name')}: {a.get('value_name')}" for a in var_attrs)
 
-        # unit_price/sale_fee são POR UNIDADE (confirmado: 3un. x 78,99 =
-        # 236,97 = total_amount do pedido; 9,36 x 3 = 28,08 = tarifa de 12%
-        # mostrada no detalhe do pedido no próprio ML) -- multiplica pela
-        # quantidade pra refletir o valor real movimentado nessa linha.
-        quantidade = oi.get("quantity", 0) or 0
-        venda_total = round((oi.get("unit_price", 0) or 0) * quantidade, 2)
-        taxa_total = round((oi.get("sale_fee", 0) or 0) * quantidade, 2)
+# ── Busca por período, sem produto específico (todos os produtos) ─────────────
+#
+# Sem MLB/Family ID pra resolver primeiro -- busca os PEDIDOS direto por data
+# (order.date_created.from/to, sem filtro de item) e só depois descobre quais
+# produtos apareceram, resolvendo SKU/frete pra cada um. "Todos" fica de fora
+# por segurança: o vendedor já tem 34 mil+ pedidos pagos no total, buscar tudo
+# sem filtro de período travaria a busca.
 
-        linhas.append({
-            "order_id": pedido.get("id"),
-            "pack_id": pedido.get("pack_id"),  # varios pedidos podem compartilhar 1 pacote/envio
-            "shipping_id": shipping_id,        # chave real pra deduplicar frete na soma
-            "data": pedido.get("date_created"),
-            "status": pedido.get("status"),
-            "fulfilled": bool(pedido.get("fulfilled")),
-            "mlb_id": item_id_alvo,
-            "titulo": item.get("title", ""),
-            "variacao": variacao,
-            "quantidade": quantidade,
-            "preco_unitario": oi.get("unit_price", 0),
-            "taxa_ml": oi.get("sale_fee", 0),
-            "venda_total": venda_total,
-            "taxa_total": taxa_total,
-            "tarifa_envio": tarifa_envio,
-            "frete_alto": venda_total < _LIMITE_VENDA_FRETE_ALTO and tarifa_envio > _LIMITE_FRETE_ALTO,
-            "listing_type_id": oi.get("listing_type_id", ""),
-            "total_pedido": pedido.get("total_amount", 0),
-        })
-    return linhas
+def _buscar_todos_pedidos_periodo(date_from: str, date_to: str, limite_seguranca: int = 20000) -> list:
+    pedidos = []
+    offset = 0
+    while True:
+        params = {"seller": ML_USER_ID, "limit": 51, "offset": offset}
+        if date_from:
+            params["order.date_created.from"] = date_from
+        if date_to:
+            params["order.date_created.to"] = date_to
+        resp = ml_get(f"{_BASE}/orders/search", params)
+        if not isinstance(resp, dict):
+            break
+        resultados = resp.get("results", [])
+        if not resultados:
+            break
+        pedidos.extend(resultados)
+        total = (resp.get("paging") or {}).get("total", 0)
+        offset += 51
+        if offset >= total or offset >= limite_seguranca:
+            break
+        time.sleep(0.05)
+    return pedidos
+
+
+def buscar_vendas_todos_produtos(filtro: str = "todos", mes: str = "") -> dict:
+    date_from, date_to = _calcular_intervalo(filtro, mes)  # pode levantar ValueError
+    if filtro == "todos":
+        raise ValueError(
+            'Pra buscar todos os produtos, escolha um período (não pode ser "Todos") -- '
+            "o histórico completo do vendedor é grande demais pra isso."
+        )
+
+    pedidos = _buscar_todos_pedidos_periodo(date_from, date_to)
+    if not pedidos:
+        return {
+            "ok": True, "produto_buscado": "(todos os produtos)", "tipo": "todos",
+            "itens_consultados": [], "vendas": [],
+            "filtro_aplicado": {"filtro": filtro, "date_from": date_from, "date_to": date_to},
+        }
+
+    shipping_ids = {
+        (p.get("shipping") or {}).get("id") for p in pedidos if (p.get("shipping") or {}).get("id")
+    }
+    custo_envio_por_shipping = {}
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+        futuros = {pool.submit(_buscar_custo_envio, sid): sid for sid in shipping_ids}
+        for futuro in as_completed(futuros):
+            custo_envio_por_shipping[futuros[futuro]] = futuro.result()
+
+    item_ids = {
+        (oi.get("item") or {}).get("id")
+        for p in pedidos for oi in (p.get("order_items") or [])
+        if (oi.get("item") or {}).get("id")
+    }
+    sku_por_item = {}
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+        futuros = {pool.submit(get_item, iid): iid for iid in item_ids}
+        for futuro in as_completed(futuros):
+            item = futuro.result() or {}
+            sku_por_item[futuros[futuro]] = extract_seller_sku(item)
+
+    vendas = []
+    for pedido in pedidos:
+        shipping_id = (pedido.get("shipping") or {}).get("id")
+        tarifa_envio = custo_envio_por_shipping.get(shipping_id, 0.0) if shipping_id else 0.0
+        for oi in pedido.get("order_items", []) or []:
+            linha = _linha_de_item(oi, pedido, tarifa_envio)
+            linha["sku"] = sku_por_item.get(linha["mlb_id"], "")
+            linha["produto_buscado"] = "(todos os produtos)"
+            vendas.append(linha)
+
+    return {
+        "ok": True,
+        "produto_buscado": "(todos os produtos)",
+        "tipo": "todos",
+        "itens_consultados": sorted(item_ids),
+        "vendas": vendas,
+        "filtro_aplicado": {"filtro": filtro, "date_from": date_from, "date_to": date_to},
+    }
 
 
 # ── Handler principal da busca ─────────────────────────────────────────────────
@@ -400,11 +494,12 @@ class Handler(BaseHTTPRequestHandler):
             produto = (qs.get("produto") or [""])[0].strip()
             filtro = (qs.get("filtro") or ["todos"])[0].strip()
             mes = (qs.get("mes") or [""])[0].strip()
-            if not produto:
-                self._json({"ok": False, "erro": "Informe um MLB ID ou Family ID."}, 400)
-                return
             try:
-                resultado = buscar_vendas_produto(produto, filtro, mes)
+                if produto:
+                    resultado = buscar_vendas_produto(produto, filtro, mes)
+                else:
+                    # Sem MLB/Family ID -- busca todos os produtos vendidos no período.
+                    resultado = buscar_vendas_todos_produtos(filtro, mes)
                 self._json(resultado)
             except ValueError as e:
                 self._json({"ok": False, "erro": str(e)}, 400)

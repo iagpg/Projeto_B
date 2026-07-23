@@ -454,6 +454,10 @@ python dashboard_vendas/server.py
   de cada uma — inclusive anúncios fechados/migrados, onde o histórico de
   venda muitas vezes fica (o anúncio ativo pode mostrar 0 vendas mesmo tendo
   vendido bastante antes de ser migrado).
+- **Campo vazio** → busca todos os produtos vendidos no período escolhido
+  (busca os pedidos direto por data, sem resolver item primeiro). Exige um
+  filtro específico — não funciona com "Todos", que buscaria o histórico
+  inteiro do vendedor (34 mil+ pedidos).
 
 **Filtro de período** (aplicado direto na chamada ao ML, não busca tudo pra
 filtrar depois): Todos · Hoje · Últimos 7 dias · Este mês · Mês específico

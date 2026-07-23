@@ -685,7 +685,9 @@
 
     $('tbody').innerHTML = entradas.map(entrada => {
       if (!entrada.isPack) return linhaHtml(entrada.v, false);
-      const aberto = pacotesAbertos.has(entrada.agregado.pack_id);
+      // pack_id vem como NÚMERO da API, mas tr.dataset.pack (usado no clique
+      // abaixo) é sempre STRING -- normaliza aqui pra Set.has() bater certo.
+      const aberto = pacotesAbertos.has(String(entrada.agregado.pack_id));
       const pai = linhaPacotePaiHtml(entrada.agregado, entrada.filhos.length, aberto);
       const filhos = aberto ? entrada.filhos.map(f => linhaHtml(f, true)).join('') : '';
       return pai + filhos;

@@ -238,10 +238,10 @@
   tbody tr.row-pack-filho td { padding-top: 0.35rem; padding-bottom: 0.35rem; }
 
   /* Venda avulsa que faz parte de um pacote, mas cujo(s) pedido(s) irmão(s)
-     não estão na lista atual pra formar o agrupamento pai/filho -- mesmo
-     tom do row-pack-pai, só sem negrito/cursor (não é clicável/expansível). */
-  tbody tr.row-pacote-solo { background: var(--accent-soft); }
-  tbody tr.row-pacote-solo:hover { filter: brightness(0.97); }
+     não estão na lista atual (ou o pacote genuinamente só tem 1 pedido) --
+     mesmo tom do row-pack-pai, só informativo: sem negrito, sem cursor de
+     ponteiro, e SEM hover de clicável (nada acontece ao clicar aqui). */
+  tbody tr.row-pacote-solo { background: var(--accent-soft); cursor: default; }
   tbody tr.row-pacote-solo.row-alerta { background: var(--bad-bg); }
   td.num, th.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; text-align: right; }
   td.mono { font-family: var(--font-data); font-size: 0.82rem; }
@@ -639,7 +639,7 @@
 
     const titulos = [];
     if (v.frete_alto) titulos.push('Frete provavelmente acima do normal pra essa venda');
-    if (pacoteSolo) titulos.push(`Faz parte do pacote ${v.pack_id} — outro produto desse pacote não está nessa lista agora`);
+    if (pacoteSolo) titulos.push(`Pedido associado ao pacote ${v.pack_id} — pode ter outro produto que não está nessa lista, ou o ML atribuiu isso mesmo sendo um pedido avulso (não é clicável)`);
 
     return `
       <tr class="${classe}" ${titulos.length ? `title="${titulos.join(' — ')}"` : ''}>

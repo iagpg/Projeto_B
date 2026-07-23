@@ -555,6 +555,11 @@
     return `<span class="pill neutral">${s || '—'}</span>`;
   }
 
+  const ROTULO_TIPO_ANUNCIO = { gold_special: 'Clássico', gold_pro: 'Premium' };
+  function rotuloTipoAnuncio(id) {
+    return ROTULO_TIPO_ANUNCIO[id] || id || '';
+  }
+
   const LIMITE_VENDA_FRETE_ALTO = 78.99; // mesmo limite do servidor (_LIMITE_VENDA_FRETE_ALTO)
   const LIMITE_FRETE_ALTO = 9.0;
 
@@ -617,7 +622,7 @@
         <td class="num">${fmtBRL(v.venda_total)}</td>
         <td class="num">${fmtBRL(v.taxa_total)}</td>
         <td class="num">${fmtBRL(v.tarifa_envio)}${v.frete_alto ? ' ⚠️' : ''}</td>
-        <td class="mono">${v.listing_type_id || ''}</td>
+        <td class="mono">${rotuloTipoAnuncio(v.listing_type_id)}</td>
         <td>${statusPill(v.status)}</td>
         <td>${v.fulfilled ? '✓' : ''}</td>
       </tr>

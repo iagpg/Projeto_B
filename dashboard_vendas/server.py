@@ -604,6 +604,7 @@ _COLUNAS_EXPORT = [
 ]
 _CHAVES_MOEDA = {"venda_total", "taxa_total", "tarifa_envio"}
 _COR_FRETE_ALTO = "FCE4CC"  # laranja claro -- mesma leitura visual da tabela web
+_ROTULO_TIPO_ANUNCIO = {"gold_special": "Clássico", "gold_pro": "Premium"}
 
 
 def gerar_xlsx(vendas: list) -> bytes:
@@ -621,6 +622,8 @@ def gerar_xlsx(vendas: list) -> bytes:
             valor = v.get(chave, "")
             if chave in ("fulfilled", "frete_alto"):
                 valor = "Sim" if valor else "Não"
+            elif chave == "listing_type_id":
+                valor = _ROTULO_TIPO_ANUNCIO.get(valor, valor)
             linha.append(valor)
         ws.append(linha)
 
